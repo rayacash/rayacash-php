@@ -1,0 +1,91 @@
+{
+    "name": "rayacash/rayacash-php",
+    "description": "SDK oficial de PHP para la API de Raya Cash: pagos por transferencia, transferencias, balance y webhooks.",
+    "type": "library",
+    "keywords": [
+        "raya",
+        "raya cash",
+        "pagos",
+        "transferencias",
+        "cvu",
+        "cbu",
+        "argentina",
+        "api",
+        "sdk"
+    ],
+    "homepage": "https://raya.cash/api",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Raya Cash",
+            "email": "soporte@raya.cash",
+            "homepage": "https://raya.cash"
+        }
+    ],
+    "support": {
+        "email": "soporte@raya.cash",
+        "issues": "https://github.com/rayacash/rayacash-php/issues",
+        "source": "https://github.com/rayacash/rayacash-php",
+        "docs": "https://raya.cash/api"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "ext-openssl": "*",
+        "php-cs-fixer/shim": "3.95.27",
+        "phpstan/phpstan": "2.3.4",
+        "phpunit/phpunit": "^10.5 || ^11.5 || ^12.5 || ^13.4",
+        "psr/log": "^3.0"
+    },
+    "suggest": {
+        "psr/log": "Para mandar los logs del SDK a tu logger PSR-3 (Monolog, Laravel, Symfony)."
+    },
+    "autoload": {
+        "psr-4": {
+            "RayaCash\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "RayaCash\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": [
+            "Composer\\Config::disableProcessTimeout",
+            "phpunit"
+        ],
+        "test:coverage": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php -d xdebug.mode=coverage vendor/bin/phpunit --path-coverage --coverage-cobertura=build/coverage/cobertura.xml --coverage-html=build/coverage/html",
+            "@php scripts/check-coverage.php build/coverage/cobertura.xml --lines=95 --branches=95 --functions=95"
+        ],
+        "lint": [
+            "php-cs-fixer check --diff --show-progress=none",
+            "@php scripts/check-columns.php"
+        ],
+        "fix": "php-cs-fixer fix --show-progress=none",
+        "analyse": [
+            "phpstan analyse --no-progress --memory-limit=1G",
+            "phpunit --testsuite types"
+        ],
+        "check:version": "@php scripts/check-version.php",
+        "check:package": "bash scripts/check-package.sh"
+    },
+    "scripts-descriptions": {
+        "test": "Los tests (nunca salen a la red: transporte falso y loopback).",
+        "test:coverage": "Tests con cobertura de src/ (Xdebug): mínimo 95 % de líneas, ramas y funciones.",
+        "lint": "Formato PER-CS (php-cs-fixer) y 100 columnas.",
+        "fix": "Aplica el formato de php-cs-fixer.",
+        "analyse": "PHPStan al nivel máximo y las aserciones de tipos de la API pública.",
+        "check:version": "RayaCash::VERSION = primera sección del CHANGELOG = línea «Versión» del README.",
+        "check:package": "El zip que baja Composer: qué trae, y que se instala y funciona en un proyecto vacío."
+    },
+    "config": {
+        "lock": false,
+        "sort-packages": true
+    }
+}

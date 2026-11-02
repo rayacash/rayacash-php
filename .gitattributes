@@ -1,0 +1,19 @@
+# Lo que no viaja en el paquete. Packagist sirve el zip que arma GitHub con `git archive`, que
+# saltea lo marcado export-ignore: el paquete trae solo composer.json, src/, README.md,
+# CHANGELOG.md y LICENSE (scripts/check-package.sh lo comprueba). Un archivo nuevo en la raíz va
+# acá o en esa lista.
+* text=auto eol=lf
+*.php diff=php
+
+/.editorconfig           export-ignore
+/.gitattributes          export-ignore
+/.github                 export-ignore
+/.gitignore              export-ignore
+/.php-cs-fixer.dist.php  export-ignore
+/SDK.md                  export-ignore
+/docker                  export-ignore
+/examples                export-ignore
+/phpstan.neon.dist       export-ignore
+/phpunit.xml.dist        export-ignore
+/scripts                 export-ignore
+/tests                   export-ignore

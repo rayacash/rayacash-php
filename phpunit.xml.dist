@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Vale para PHPUnit 10.5 (PHP 8.1), 11.5 (8.2), 12.5 (8.3) y 13.x (8.4 en adelante): usa solo
+    atributos que existen en todos. scripts/check-phpunit-config.php lo valida contra el XSD del
+    PHPUnit instalado en cada versión. Un override local va en phpunit.xml (ignorado por git).
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         colors="true"
+         defaultTestSuite="unit"
+         executionOrder="default"
+         beStrictAboutOutputDuringTests="true"
+         beStrictAboutTestsThatDoNotTestAnything="true"
+         failOnDeprecation="true"
+         failOnEmptyTestSuite="true"
+         failOnNotice="true"
+         failOnPhpunitDeprecation="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         displayDetailsOnPhpunitDeprecations="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerErrors="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
+    <testsuites>
+        <!-- Los tests del SDK (composer test): todo tests/ salvo los tipos. -->
+        <testsuite name="unit">
+            <directory suffix="Test.php">tests</directory>
+            <exclude>tests/Types</exclude>
+        </testsuite>
+        <!-- Los tipos de la API pública, con PHPStan (composer analyse): no dependen del PHP. -->
+        <testsuite name="types">
+            <directory suffix="Test.php">tests/Types</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+
+    <php>
+        <!-- Todos los avisos, también con el php.ini de producción: un deprecation es un error. -->
+        <ini name="error_reporting" value="-1"/>
+        <!--
+            Ningún test sale a la red (no hay sandbox: cada request mueve plata). Si un curl se
+            escapara de la guardia de tests/bootstrap.php, libcurl lo manda a este proxy, donde no
+            hay nada. Loopback va directo (los hosts que api_base acepta con http://):
+            TransportTest usa un servidor en 127.0.0.1. Para libcurl, ::1 va sin corchetes. Sin
+            HTTP_PROXY en mayúsculas: libcurl no la lee (httpoxy).
+        -->
+        <env name="all_proxy" value="http://127.0.0.1:9" force="true"/>
+        <env name="ALL_PROXY" value="http://127.0.0.1:9" force="true"/>
+        <env name="https_proxy" value="http://127.0.0.1:9" force="true"/>
+        <env name="HTTPS_PROXY" value="http://127.0.0.1:9" force="true"/>
+        <env name="http_proxy" value="http://127.0.0.1:9" force="true"/>
+        <env name="no_proxy" value="127.0.0.1,localhost,::1" force="true"/>
+        <env name="NO_PROXY" value="127.0.0.1,localhost,::1" force="true"/>
+    </php>
+</phpunit>

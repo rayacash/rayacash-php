@@ -1,0 +1,82 @@
+# Changelog
+
+Los cambios de cada versión de `rayacash/rayacash-php` publicada en [Packagist](https://packagist.org/packages/rayacash/rayacash-php). Sigue [semver](https://semver.org/lang/es/): los cambios incompatibles solo llegan en una versión mayor (`2.0.0`), y los anotamos acá.
+
+## 1.0.0
+
+Primera versión, con el contrato y el comportamiento de `rayacash` 1.0.0 para Python.
+
+- `new RayaClient($apiKey, [...])`, `new RayaClient([...])` o `new RayaClient(config: [...])`, con las opciones `api_key`, `api_base`, `timeout`, `max_network_retries`, `http_client` y `app_info`. Sin clave, lee `RAYA_SECRET_KEY` (de `$_ENV`, `$_SERVER` o `getenv()`). Rechaza sin hacer ninguna request la clave pública (`raya_pk_…`), una clave vacía o con espacios, una `api_base` que no sea `https://` (salvo `http://localhost`) y las opciones que no existen. `var_dump($client)` enmascara la clave, `close()` suelta la conexión y un `RayaClient` no se deja serializar.
+- Los 7 endpoints. Los parámetros van en un array, con los nombres de la API, y las opciones de la llamada, en otro array, el último argumento:
+  - `$client->balance->retrieve()`.
+  - `$client->transfers->create(['amount' => …, 'destination' => …], ['idempotency_key' => …])`, con la `idempotency_key` obligatoria.
+  - `$client->transfers->retrieve($transferId)`.
+  - `$client->transfers->list(['direction' => …, 'status' => …, 'created_gte' => …, 'created_lt' => …, 'limit' => …, 'cursor' => …])`. Acepta `DateTimeInterface` o strings ISO 8601.
+  - `$client->payments->create(['amount' => …, 'description' => …, 'external_reference' => …, 'return_url' => …, 'metadata' => …], ['idempotency_key' => …])`.
+  - `$client->payments->retrieve($paymentId)`.
+  - `$client->payments->refund($paymentId, ['idempotency_key' => …])`.
+- Opciones por llamada: `['api_key' => …, 'timeout' => …, 'max_network_retries' => …]`, más la `idempotency_key` en los POST. Un parámetro o una opción desconocida falla sin mandar nada, con «¿quisiste decir…?» si llega en camelCase, y las opciones en una lista, sin nombres, también.
+- Estilo global, como stripe-php:
+  - `RayaCash::setApiKey()` (o `RAYA_SECRET_KEY`), `setApiBase()`, `setTimeout()`, `setMaxNetworkRetries()`, `setHttpClient()`, `setAppInfo()`, `setLog()` y `setLogger()`, con sus `get…()` (salvo la clave), y `RayaCash::reset()`. La configuración se lee en cada request; cada valor se valida al asignarlo, salvo la clave, que se valida en cada request.
+  - `Balance::retrieve()`, `Transfer::create/retrieve/list()` y `Payment::create/retrieve()`.
+  - `Payment::refundById($paymentId)` y `$payment->refund()`. La instancia usa el cliente del que vino el pago.
+- Objetos (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject`, `RayaObject`):
+  - Los campos se leen como propiedades o como array (`$payment->status`, `$payment['status']`), con los valores tal como los manda la API (montos `int`/`float`, fechas en string ISO). `json_encode($obj)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `toArray()`, arrays comunes. `(string) $obj` da el JSON ordenado y con sangría del `str()` de Python, sin depender del `php.ini`.
+  - Conservan los campos que el SDK todavía no conoce. Leer uno que no existe tira `\OutOfBoundsException`; `??` e `isset()` nunca fallan.
+  - `metadata` queda como array común.
+  - Cada uno trae `getLastResponse()`, con `requestId`, `httpStatus`, `headers` e `idempotencyKey`.
+  - `constructFrom()` los arma sin hacer requests, para tus tests.
+  - Constantes para los estados y los tipos (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), que pueden sumar valores.
+- Montos: `amount` acepta `int`, `float`, `string` decimal o un decimal exacto (`BcMath\Number`, el `BigDecimal` de brick/math o cualquier `\Stringable`) y viaja como número JSON canónico (`'1500.50'` → `1500.5`). Nunca se redondea: lo que tiene más de 2 decimales lo rechaza la API.
+- Idempotencia:
+  - En `payments->create` y `refund`, sin clave propia se genera un UUID v4 por llamada. `RayaCash\Util\Uuid::v4()` genera las tuyas.
+  - Cada reintento usa la misma clave, que queda en `getLastResponse()->idempotencyKey` y en `$e->getIdempotencyKey()`.
+  - Se valida que la clave tenga de 1 a 255 caracteres ASCII visibles.
+- Reintentos:
+  - Se reintentan los cortes de conexión, los timeouts, `409 IDEMPOTENCY_KEY_IN_USE`, `429`, `408` y los `5xx`, con espera exponencial con jitter (0,5 s a 8 s) y respetando `Retry-After`. Por defecto son 2.
+  - `503 API_UNAVAILABLE` y los demás `4xx` no se reintentan.
+  - Si `Retry-After` pasa de 60 s, la excepción sale enseguida con `getRetryAfter()`.
+- Timeout de 65 s por intento (10 s para conectar): el servidor corta a los 60 s y crear un pago puede tardar ~40 s. Nunca se siguen redirects.
+- Paginación: `foreach ($page->autoPagingIter() as $item)` pide cada página siguiente con `cursor` y los mismos filtros y opciones, recién cuando hace falta. También `nextPage()`, `count($page)` y `foreach` sobre una página.
+- Errores:
+  - Jerarquía con base en `RayaException` (que extiende `\Exception`): `InvalidRequestException` (con `getParam()`), `NotFoundException`, `AuthenticationException`, `PermissionDeniedException`, `ConflictException`, `IdempotencyException`, `UnprocessableEntityException`, `RateLimitException`, `ApiException`, `ApiConnectionException` (con `shouldRetry()`) y `SignatureVerificationException` (con `getSigHeader()`).
+  - La clase sale del código HTTP y `getErrorCode()` es el código del contrato; `getCode()` es el status HTTP. `context()` le pasa a Laravel el código, el request id y el status para su log.
+  - Las respuestas sin el objeto `error` (HTML del edge) traen `RATE_LIMITED`, `INTERNAL_ERROR` o `INVALID_RESPONSE`, y los cortes, `NETWORK_ERROR` o `TIMEOUT`.
+  - Los errores de programación son `\TypeError`, `\ValueError` o `\ArgumentCountError` (una lista sin contexto para paginar, `\LogicException`).
+- Webhooks:
+  - `Webhook::constructEvent($payload, $sigHeader, $secret, $tolerance = 300)` y `$client->constructEvent(…)`, que liga el evento al cliente.
+  - `WebhookSignature::verifyHeader`, `computeSignature` y `generateHeader`, para tus tests.
+  - La firma se verifica sobre el body crudo (un string o un `\Stringable`, como el body de una request PSR-7) y acepta varias `v1` (rotación del secreto). La tolerancia es simétrica y vale `null` (o `0`) para desactivarla.
+  - Probado con los vectores del contrato.
+- `$client->rawRequest()` para endpoints que el SDK todavía no tiene.
+- `HttpClientInterface` para usar otro cliente HTTP (o uno falso en tus tests). El de serie, `CurlClient`, reusa la conexión y acepta opciones `CURLOPT_*` (proxy, certificados), salvo las que maneja el SDK, apagar la verificación TLS y `CURLOPT_VERBOSE`, que mostraría la clave. Sus opciones pueden llevar contraseñas: no aparecen en los volcados ni (desde PHP 8.2) en las trazas, no se serializan, y el error de curl con un proxy que no anda no muestra su usuario ni su contraseña.
+- `User-Agent: rayacash-php/1.0.0 PHP/… curl/…`, más el `app_info` de tu plugin. Se ve en Developers › Logs.
+- Logging: `RAYA_LOG=info|debug` o `RayaCash::setLog()` lo muestran en STDERR (en FPM y Apache, en `error_log()`), y `RayaCash::setLogger()` lo manda a un logger PSR-3. Nunca se loguean la clave ni los bodies.
+- La clave no aparece en `var_dump`, `print_r`, `var_export`, `json_encode` ni `serialize` de ningún objeto del SDK, y cada parámetro que puede llevarla está marcado con `#[\SensitiveParameter]`.
+- Sin dependencias: solo las extensiones `curl` y `json`. Tipos para PHPStan en toda la API pública (`@property-read` en los objetos y arrays con forma en los parámetros). PHP 8.1 a 8.5.
+- Diferencias con los SDKs de Python y Node.js, por PHP o elegidas a propósito:
+  - Las excepciones se llaman `*Exception` (`ApiException` y `ApiConnectionException`, no `APIError` ni `APIConnectionError`) y se leen con getters (`getErrorCode()`, `getData()`, `getRetryAfter()`…), porque `\Exception` ya usa `$code` y `$message`.
+  - El reembolso por id del estilo global es `Payment::refundById($id)`: PHP no deja tener un `refund()` estático y otro de instancia.
+  - Sincrónico: no hay métodos async.
+  - Los setters del estilo global validan cada valor al asignarlo, salvo la clave, que se valida en cada request: un `.env` vacío no rompe el arranque de tu framework. En Python y Node, `api_base`, el timeout, los reintentos y el cliente HTTP fallan recién en la request, y un `log` que no es `info` ni `debug` se ignora; `app_info` se valida al asignarlo, como acá (`set_app_info()` y `setAppInfo()`).
+  - `new RayaClient(config: ['api_key' => …])` vale (Node lo rechaza): «Pasaste la clave dos veces» sale solo si la clave llega como primer argumento y también en `api_key`.
+  - Una opción en `null`, del cliente o de una llamada, usa el valor por defecto, como en Node (en Python, un `timeout` o un `max_network_retries` en `None` en una llamada son `TypeError`).
+  - Sin `strict_types`, PHP convierte los valores antes de que lleguen al SDK, pero un `bool` en `RayaCash::setTimeout()`, en `setMaxNetworkRetries()` o en la `tolerance` de los webhooks, y un número con decimales en `setMaxNetworkRetries()` (`1.5` o `'1.5'`), siguen siendo `\TypeError`, como en Python y Node: nunca un timeout de 1 s, los reintentos apagados o redondeados ni el chequeo del reloj desactivado. Un número en texto (`'90'`, de un `.env`) sí vale en los setters. El error de `setTimeout()` no nombra el tipo, como el de Python: el `bool` pudo venir de un texto (`'90s'`).
+  - `api_base` tiene que ser una URL en ASCII visible y con un puerto válido: al construir el cliente, Python acepta `https://ñ.com`, una con un espacio o con el puerto `99999`.
+  - El timeout llega hasta 2147483 s (unos 24 días), como en Node: curl lo recibe en milisegundos en un `long`, que en Windows es de 32 bits. Python acepta más.
+  - Un campo que no existe tira `\OutOfBoundsException`, como el `AttributeError` de Python (en Node da `undefined`), y borrar uno que no existe no falla. No hay regla para los nombres que empiezan con `_`.
+  - Si un endpoint responde otro tipo de objeto conocido (por ejemplo, un pago donde se esperaba una transferencia), sale `ApiException` con `INVALID_RESPONSE` («La API respondió algo que no es una transferencia.»): los tipos de retorno de PHP no dejan devolverlo. Un tipo desconocido, o una respuesta sin `object`, sigue armándose con la clase esperada. Ese error, y el de una lista que no es una lista («…no es una lista.»), traen el request id, los headers y el body de esa respuesta y la `idempotency_key` que se usó, como el resto de los errores de la API; en Python y Node, el de la lista trae solo el status.
+  - Los argumentos de más dan `\ArgumentCountError` (`retrieve($id, [], $options)` mandaría la request sin esas opciones), y las claves desconocidas en los parámetros o en las opciones, `\TypeError` con «¿quisiste decir…?», antes de mandar nada: PHP descarta en silencio los argumentos de más.
+  - En `rawRequest()`, un GET con body se rechaza, como en Node.
+  - En `rawRequest()`, la ruta va sin query ni fragmento y en ASCII visible (los ids, con `rawurlencode()`): los filtros van en `params`. Python y Node la mandan igual (y con `params`, Python descarta la query de la ruta).
+  - Un id `"."` o `".."` es `\ValueError`, antes de mandar nada: curl resuelve esos segmentos y la request saldría de su ruta (`transfers->retrieve('.')` pediría `/v1/transfers/`). Python y Node todavía lo mandan.
+  - Un monto en string acepta solo dígitos ASCII y hasta 1000 dígitos, como en Node.
+  - Los floats fuera de los montos (por ejemplo, en el body de `rawRequest()`) viajan en notación decimal, sin exponente ni ceros de más: `1500.0` viaja como `1500` (como en Node; Python manda `1500.0`) y `-0.0`, como `-0` (Node manda `0`). Un backend en Python los lee como `int`.
+  - La query codifica el espacio como `%20`, no como `+`.
+  - `Retry-After` con fecha solo acepta el formato HTTP estricto, y una fecha imposible (31 de febrero) se ignora.
+  - El secreto del webhook en `null` es `\ValueError`, como uno vacío (en PHP, una config sin valor es `null`; en Python es `TypeError`), y una `tolerance` `NAN` se rechaza.
+  - `CurlClient` acepta `CURLOPT_SSL_VERIFYHOST` en `true` o `'2'` y lo usa como `2` (verificar), sin el aviso de `curl_setopt()`; `0`, `1` o apagar `CURLOPT_SSL_VERIFYPEER` se rechazan.
+  - `toArray()` deja un objeto vacío (`{}`) como `[]` y uno con claves `"0"`, `"1"`… como lista, porque PHP no los distingue; `json_encode()` y `(string)` sí los conservan, salvo en una `metadata` fuera del contrato, que no sea un objeto de strings (`{"n":{}}` sale `{"n":[]}`).
+  - PHP convierte las claves que parecen enteros en `int`: la `metadata` `{"8812": "x"}` vuelve como `[8812 => 'x']`, y una con claves `"0"`, `"1"`… vuelve como lista, que `payments->create` rechaza como a cualquier otra lista: para mandarla de vuelta, `(object) $payment->metadata`.
+  - Una lista clonada conserva su contexto de paginación.
+  - En PHP no hay fechas sin zona: un `DateTimeInterface` siempre tiene una.

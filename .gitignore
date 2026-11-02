@@ -1,0 +1,26 @@
+# Dependencias: composer.json tiene "lock": false (un solo composer.lock no sirve para PHPUnit
+# 10 a 13 en PHP 8.1 a 8.5), así que cada quien resuelve las suyas. Con scripts/dev.sh, vendor/
+# es el punto de montaje (vacío) del volumen de cada versión.
+/vendor/
+/composer.lock
+
+# Salidas de los tests, la cobertura, PHPStan y php-cs-fixer
+/build/
+/.phpunit.cache/
+/.phpunit.result.cache
+/.php-cs-fixer.cache
+
+# Overrides locales (los .dist son los del repo)
+/phpunit.xml
+/phpstan.neon
+/.php-cs-fixer.php
+
+# La guía para quien cambia el SDK: es local, como la de Node, y no se versiona
+/SDK.md
+
+.DS_Store
+.idea/
+.vscode/
+.env
+
+docker/*

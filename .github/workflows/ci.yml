@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Sin composer.lock: los lunes se prueban las últimas versiones de PHPUnit y de cada PHP.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # php-cs-fixer corre en el piso de PHP, como recomienda: en uno más nuevo podría meter
+      # sintaxis que 8.1 no tiene.
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          coverage: none
+          ini-file: development
+      - run: composer update --no-interaction --no-progress
+      - run: composer lint
+
+  analyse:
+    name: Tipos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: bcmath
+          coverage: none
+          ini-file: development
+      - run: composer update --no-interaction --no-progress
+      - run: composer analyse
+
+  test:
+    name: Tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # 8.6 sale el 19-11-2026: hasta entonces es una RC y puede fallar sin frenar el CI.
+    continue-on-error: ${{ matrix.php == '8.6' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: bcmath
+          coverage: none
+          ini-file: development
+      - run: composer update --no-interaction --no-progress
+      - name: phpunit.xml.dist vale para el PHPUnit de esta versión
+        run: php scripts/check-phpunit-config.php
+      # Los tests nunca llaman a la API real: todo va por un transporte falso (y loopback). Y acá
+      # corren sin red: scripts/offline.sh deja solo loopback, como docker run --network none.
+      - run: bash scripts/offline.sh composer test
+
+  coverage:
+    name: Cobertura
+    runs-on: ubuntu-24.04
+    # Con Xdebug, los tests tardan de 10,5 a 14 minutos en una máquina rápida, según la carga
+    # (medido en noviembre de 2026, con 851 tests): un runner de GitHub es más lento.
+    timeout-minutes: 45
+    env:
+      COMPOSER_ALLOW_XDEBUG: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: bcmath
+          coverage: xdebug
+          ini-file: development
+      - run: composer update --no-interaction --no-progress
+      - run: bash scripts/offline.sh composer test:coverage
+
+  package:
+    name: Paquete y versión
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # El piso de PHP y el php.ini de producción: como lo instala quien usa el SDK.
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          coverage: none
+      - run: composer validate --strict
+      # La compuerta del release: imprime el tag que hay que crear sobre este commit.
+      - run: php scripts/check-version.php
+      - run: bash scripts/offline.sh bash scripts/check-package.sh

@@ -1,0 +1,60 @@
+# Comprueba cada release de GitHub con tag vX.Y.Z. No publica nada y no usa tokens: Packagist lee
+# el tag solo (su app de GitHub le avisa en cada push) apenas se publica el release, porque
+# Packagist no tiene Trusted Publishing. Por eso el release va únicamente sobre un commit de master
+# con el CI en verde: si algo de acá falla, la versión ya está en Packagist y no se puede cambiar
+# (no muevas el tag): arreglalo y publicá un parche.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tag, tests y paquete
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: bcmath
+          coverage: none
+          ini-file: development
+      - name: El tag tiene que coincidir con la versión
+        run: php scripts/check-version.php "$GITHUB_REF_NAME"
+      - run: composer validate --strict
+      - run: composer update --no-interaction --no-progress
+      - run: bash scripts/offline.sh composer test
+      - run: bash scripts/offline.sh bash scripts/check-package.sh
+
+  packagist:
+    name: La versión llegó a Packagist
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Esperar a que Packagist muestre la versión del tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://repo.packagist.org/p2/rayacash/rayacash-php.json"
+          # Packagist guarda el tag (v1.0.0) en version: se compara la forma normalizada.
+          for _ in $(seq 60); do
+            if curl -fsS "$url" | jq -e --arg v "$version.0" \
+                '.packages["rayacash/rayacash-php"] | any(.version_normalized == $v)' >/dev/null
+            then
+              echo "::notice::rayacash/rayacash-php $version ya está en Packagist."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Packagist no muestra $version después de 15 minutos: en la página del" \
+            "paquete en packagist.org, actualizalo con Update y revisá que no diga «This package" \
+            "is not auto-updated» (si lo dice, falta el hook de GitHub)." >&2
+          exit 1

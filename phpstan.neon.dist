@@ -1,0 +1,26 @@
+# PHPStan al nivel máximo sobre todo el PHP del repo, para PHP 8.1 a 8.5 (composer analyse).
+# Un override local va en phpstan.neon (ignorado por git).
+parameters:
+    level: max
+    phpVersion:
+        min: 80100
+        max: 80599
+    paths:
+        - src
+        - tests
+        - examples
+        - scripts
+    excludePaths:
+        # Los lee tests/Types/TypesTest.php (TypeInferenceTestCase), no el análisis común.
+        - tests/Types/data/*
+        # Usan Laravel y Symfony, que no están instalados (como los webhooks de Python fuera de
+        # mypy). Siguen pasando php -l en ReadmeTest.
+        - examples/webhook-laravel.php (?)
+        - examples/webhook-symfony.php (?)
+    tmpDir: build/phpstan
+    # Una librería no puede confiar en sus phpdoc: quien la usa puede pasar cualquier cosa.
+    treatPhpDocTypesAsCertain: false
+    checkUninitializedProperties: true
+    # setUp() es el constructor de un test: ahí Support\TestCase arma $api.
+    additionalConstructors:
+        - PHPUnit\Framework\TestCase::setUp
