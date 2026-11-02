@@ -67,8 +67,9 @@ class RayaClient
      * - api_base: por defecto, https://api.raya.cash.
      * - timeout: segundos por intento (por defecto 65, con 10 para conectar). El servidor corta a
      *   los 60 s y crear un pago puede tardar ~40 s.
-     * - max_network_retries: reintentos ante cortes, 5xx, 429 e IDEMPOTENCY_KEY_IN_USE (por
-     *   defecto 2). Los POST reintentan con la misma Idempotency-Key: nunca se ejecutan dos veces.
+     * - max_network_retries: reintentos ante cortes, 408, 429, 5xx e IDEMPOTENCY_KEY_IN_USE
+     *   (por defecto 2). Los POST reintentan con la misma Idempotency-Key: nunca se ejecutan dos
+     *   veces.
      * - http_client: un HttpClientInterface propio (un CurlClient con proxy o certificados, o uno
      *   falso para tus tests). No lo cerramos.
      * - app_info: ['name' => …, 'version' => …, 'url' => …] de tu plugin, para el User-Agent.

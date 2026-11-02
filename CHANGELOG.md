@@ -4,7 +4,7 @@ Los cambios de cada versión de `rayacash/rayacash-php` publicada en [Packagist]
 
 ## 1.0.0
 
-Primera versión, con el contrato y el comportamiento de `rayacash` 1.0.0 para Python.
+Primera versión, con el contrato y el comportamiento de `rayacash` 1.0.1 para Python.
 
 - `new RayaClient($apiKey, [...])`, `new RayaClient([...])` o `new RayaClient(config: [...])`, con las opciones `api_key`, `api_base`, `timeout`, `max_network_retries`, `http_client` y `app_info`. Sin clave, lee `RAYA_SECRET_KEY` (de `$_ENV`, `$_SERVER` o `getenv()`). Rechaza sin hacer ninguna request la clave pública (`raya_pk_…`), una clave vacía o con espacios, una `api_base` que no sea `https://` (salvo `http://localhost`) y las opciones que no existen. `var_dump($client)` enmascara la clave, `close()` suelta la conexión y un `RayaClient` no se deja serializar.
 - Los 7 endpoints. Los parámetros van en un array, con los nombres de la API, y las opciones de la llamada, en otro array, el último argumento:
@@ -51,10 +51,10 @@ Primera versión, con el contrato y el comportamiento de `rayacash` 1.0.0 para P
 - `$client->rawRequest()` para endpoints que el SDK todavía no tiene.
 - `HttpClientInterface` para usar otro cliente HTTP (o uno falso en tus tests). El de serie, `CurlClient`, reusa la conexión y acepta opciones `CURLOPT_*` (proxy, certificados), salvo las que maneja el SDK, apagar la verificación TLS y `CURLOPT_VERBOSE`, que mostraría la clave. Sus opciones pueden llevar contraseñas: no aparecen en los volcados ni (desde PHP 8.2) en las trazas, no se serializan, y el error de curl con un proxy que no anda no muestra su usuario ni su contraseña.
 - `User-Agent: rayacash-php/1.0.0 PHP/… curl/…`, más el `app_info` de tu plugin. Se ve en Developers › Logs.
-- Logging: `RAYA_LOG=info|debug` o `RayaCash::setLog()` lo muestran en STDERR (en FPM y Apache, en `error_log()`), y `RayaCash::setLogger()` lo manda a un logger PSR-3. Nunca se loguean la clave ni los bodies.
+- Logging: `RAYA_LOG=info|debug` o `RayaCash::setLog()` lo muestran en STDERR (en FPM y Apache, en `error_log()`), y `RayaCash::setLogger()` lo manda a un logger PSR-3. Nunca se loguean la clave ni los bodies. Las líneas van en logfmt, con los saltos de línea y los demás caracteres de control ASCII escapados (`\n`, `\u001b`), también en los campos que el logger PSR-3 recibe como contexto: un valor que llega de afuera no puede partir una línea ni armar otra, aunque el logger interpole `{campo}` en el mensaje o vuelva a poner los saltos del JSON (como el de Laravel).
 - La clave no aparece en `var_dump`, `print_r`, `var_export`, `json_encode` ni `serialize` de ningún objeto del SDK, y cada parámetro que puede llevarla está marcado con `#[\SensitiveParameter]`.
 - Sin dependencias: solo las extensiones `curl` y `json`. Tipos para PHPStan en toda la API pública (`@property-read` en los objetos y arrays con forma en los parámetros). PHP 8.1 a 8.5.
-- Diferencias con los SDKs de Python y Node.js, por PHP o elegidas a propósito:
+- Diferencias con los SDKs de Python (`rayacash` 1.0.1) y Node.js (`rayacash` 1.0.2), por PHP o elegidas a propósito:
   - Las excepciones se llaman `*Exception` (`ApiException` y `ApiConnectionException`, no `APIError` ni `APIConnectionError`) y se leen con getters (`getErrorCode()`, `getData()`, `getRetryAfter()`…), porque `\Exception` ya usa `$code` y `$message`.
   - El reembolso por id del estilo global es `Payment::refundById($id)`: PHP no deja tener un `refund()` estático y otro de instancia.
   - Sincrónico: no hay métodos async.
@@ -65,16 +65,16 @@ Primera versión, con el contrato y el comportamiento de `rayacash` 1.0.0 para P
   - `api_base` tiene que ser una URL en ASCII visible y con un puerto válido: al construir el cliente, Python acepta `https://ñ.com`, una con un espacio o con el puerto `99999`.
   - El timeout llega hasta 2147483 s (unos 24 días), como en Node: curl lo recibe en milisegundos en un `long`, que en Windows es de 32 bits. Python acepta más.
   - Un campo que no existe tira `\OutOfBoundsException`, como el `AttributeError` de Python (en Node da `undefined`), y borrar uno que no existe no falla. No hay regla para los nombres que empiezan con `_`.
-  - Si un endpoint responde otro tipo de objeto conocido (por ejemplo, un pago donde se esperaba una transferencia), sale `ApiException` con `INVALID_RESPONSE` («La API respondió algo que no es una transferencia.»): los tipos de retorno de PHP no dejan devolverlo. Un tipo desconocido, o una respuesta sin `object`, sigue armándose con la clase esperada. Ese error, y el de una lista que no es una lista («…no es una lista.»), traen el request id, los headers y el body de esa respuesta y la `idempotency_key` que se usó, como el resto de los errores de la API; en Python y Node, el de la lista trae solo el status.
+  - Si un endpoint responde otro tipo de objeto conocido (por ejemplo, un pago donde se esperaba una transferencia), sale `ApiException` con `INVALID_RESPONSE` («La API respondió algo que no es una transferencia.»): los tipos de retorno de PHP no dejan devolverlo. Un tipo desconocido, o una respuesta sin `object`, sigue armándose con la clase esperada. Ese error, y el de una lista que no es una lista («…no es una lista.»), traen el request id, los headers y el body de esa respuesta y la `idempotency_key` que se usó, como el resto de los errores de la API.
+  - Un JSON con un `\uD800`–`\uDFFF` sin su par no se lee, porque un string de PHP en UTF-8 no puede llevarlo: en un 2xx es `ApiException` con `INVALID_RESPONSE`, en un error lleva el código de respaldo (`INTERNAL_ERROR` en un 5xx) y en un webhook es `\ValueError`. Python y Node lo leen. La API nunca lo manda.
   - Los argumentos de más dan `\ArgumentCountError` (`retrieve($id, [], $options)` mandaría la request sin esas opciones), y las claves desconocidas en los parámetros o en las opciones, `\TypeError` con «¿quisiste decir…?», antes de mandar nada: PHP descarta en silencio los argumentos de más.
   - En `rawRequest()`, un GET con body se rechaza, como en Node.
-  - En `rawRequest()`, la ruta va sin query ni fragmento y en ASCII visible (los ids, con `rawurlencode()`): los filtros van en `params`. Python y Node la mandan igual (y con `params`, Python descarta la query de la ruta).
-  - Un id `"."` o `".."` es `\ValueError`, antes de mandar nada: curl resuelve esos segmentos y la request saldría de su ruta (`transfers->retrieve('.')` pediría `/v1/transfers/`). Python y Node todavía lo mandan.
+  - En `rawRequest()`, la ruta va en ASCII visible (los ids, con `rawurlencode()`): Python y Node codifican lo que no es ASCII y los espacios (la `ñ` viaja como `%C3%B1`). Como en ellos, va sin query ni fragmento (los filtros van en `params`) y sin `\`.
   - Un monto en string acepta solo dígitos ASCII y hasta 1000 dígitos, como en Node.
   - Los floats fuera de los montos (por ejemplo, en el body de `rawRequest()`) viajan en notación decimal, sin exponente ni ceros de más: `1500.0` viaja como `1500` (como en Node; Python manda `1500.0`) y `-0.0`, como `-0` (Node manda `0`). Un backend en Python los lee como `int`.
   - La query codifica el espacio como `%20`, no como `+`.
-  - `Retry-After` con fecha solo acepta el formato HTTP estricto, y una fecha imposible (31 de febrero) se ignora.
-  - El secreto del webhook en `null` es `\ValueError`, como uno vacío (en PHP, una config sin valor es `null`; en Python es `TypeError`), y una `tolerance` `NAN` se rechaza.
+  - `Retry-After` con fecha acepta solo la forma de RFC 9110 (también sin el día de la semana, sin los segundos o sin zona), como Node: Python acepta además RFC 850, asctime, años escritos con dos cifras, zonas como `EST` y texto de más al final.
+  - El secreto del webhook en `null` es `\ValueError`, como uno vacío (en PHP, una config sin valor es `null`; en Python es `TypeError`).
   - `CurlClient` acepta `CURLOPT_SSL_VERIFYHOST` en `true` o `'2'` y lo usa como `2` (verificar), sin el aviso de `curl_setopt()`; `0`, `1` o apagar `CURLOPT_SSL_VERIFYPEER` se rechazan.
   - `toArray()` deja un objeto vacío (`{}`) como `[]` y uno con claves `"0"`, `"1"`… como lista, porque PHP no los distingue; `json_encode()` y `(string)` sí los conservan, salvo en una `metadata` fuera del contrato, que no sea un objeto de strings (`{"n":{}}` sale `{"n":[]}`).
   - PHP convierte las claves que parecen enteros en `int`: la `metadata` `{"8812": "x"}` vuelve como `[8812 => 'x']`, y una con claves `"0"`, `"1"`… vuelve como lista, que `payments->create` rechaza como a cualquier otra lista: para mandarla de vuelta, `(object) $payment->metadata`.

@@ -25,7 +25,8 @@ use RayaCash\Service\TransferService;
  * @property-read string $currency Siempre 'ARS'.
  * @property-read Transfer\Counterparty $counterparty
  * @property-read string|null $description
- * @property-read string|null $reference El id en la red de transferencias (null si pending).
+ * @property-read string|null $reference El id en la red de transferencias: null mientras está
+ *     pending, si falló y en las transferencias entre cuentas de Raya.
  * @property-read string $created_at Fecha ISO 8601 en UTC, como '2026-10-24T13:58:12Z'.
  */
 final class Transfer extends RayaObject

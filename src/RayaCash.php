@@ -70,7 +70,7 @@ final class RayaCash
     }
 
     /**
-     * Reintentos ante cortes, 5xx, 429 e IDEMPOTENCY_KEY_IN_USE (por defecto 2; 0 los apaga).
+     * Reintentos ante cortes, 408, 429, 5xx e IDEMPOTENCY_KEY_IN_USE (por defecto 2; 0 los apaga).
      *
      * @param int $retries
      */

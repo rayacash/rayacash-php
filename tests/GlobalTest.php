@@ -309,6 +309,9 @@ final class GlobalTest extends TestCase
             'api_base',
         );
         self::assertSame('http://localhost:8000', RayaCash::getApiBase());
+        // Una query o un fragmento vacíos no quedan en la api_base (ClientTest::validApiBases).
+        RayaCash::setApiBase('https://api.raya.cash/?#');
+        self::assertSame('https://api.raya.cash', RayaCash::getApiBase());
     }
 
     public function testSwappingTheGlobalHttpClient(): void

@@ -227,9 +227,9 @@ final class Encoding
 
     /**
      * El decimal en notación normal y sin ceros de más ("1.5e3" → "1500"); null si no es un
-     * número. Es el algoritmo de Node, sobre el texto: exacto, sin el redondeo a 28 dígitos de
-     * Decimal. El exponente se calcula como float, igual que Number(): uno enorme da INF y corta
-     * con "demasiados dígitos".
+     * número. Es el algoritmo de Node, sobre el texto: exacto, sin redondear nunca (como Python
+     * desde la 1.0.1). El exponente se calcula como float, igual que Number(): uno enorme da INF
+     * y corta con "demasiados dígitos".
      */
     private static function decimal(string $text, string $name): ?string
     {

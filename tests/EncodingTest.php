@@ -418,10 +418,10 @@ final class EncodingTest extends TestCase
     }
 
     /**
-     * PHP: rawurlencode() deja los puntos (como quote() en Python) y curl resuelve los segmentos
-     * «.» y «..»: retrieve('.') pediría /v1/transfers/ y refund('..'), POST /v1/refund. Fallan
-     * antes de mandar nada (Python y Node todavía los mandan: una divergencia declarada). Con más
-     * puntos, o con algo más, no es un segmento de puntos y viaja tal cual.
+     * rawurlencode() deja los puntos (como quote() en Python) y curl resuelve los segmentos «.» y
+     * «..»: retrieve('.') pediría /v1/transfers/ y refund('..'), POST /v1/refund. Fallan antes de
+     * mandar nada, como en Python y Node. Con más puntos, o con algo más, no es un segmento de
+     * puntos y viaja tal cual.
      */
     public function testPathIdRejectsDotSegments(): void
     {

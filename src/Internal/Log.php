@@ -11,6 +11,17 @@ namespace RayaCash\Internal;
  */
 final class Log
 {
+    // logfmt, como en Python y Node: un valor va entre comillas si está vacío o tiene un espacio,
+    // =, ", \, un carácter de control (U+0000 a U+001F) o DEL. Adentro, \ y " van como \\ y \",
+    // los saltos como \n, \r y \t, y el resto de los controles como \u00XX: lo que llega de
+    // afuera (un filtro, el request id o el código de un error) nunca parte la línea, arma otra
+    // ni pinta la terminal. Los campos del contexto del logger van escapados igual (sin las
+    // comillas): un logger que interpola {campo} o vuelve a poner los saltos del JSON (el de
+    // Laravel hace las dos cosas) tampoco parte la línea.
+    private const QUOTE = '/[\x00-\x20"=\\\\\x7f]/';
+    private const ESCAPE = '/[\x00-\x1f"\\\\\x7f]/';
+    private const ESCAPES = ['\\' => '\\\\', '"' => '\"', "\n" => '\n', "\r" => '\r', "\t" => '\t'];
+
     /** @var (\Closure(string): void)|null Adónde va cada línea de la consola (los tests). */
     public static ?\Closure $sink = null;
 
@@ -58,7 +69,11 @@ final class Log
             self::write($line);
         }
         if ($logger !== null) {
-            $level === 'debug' ? $logger->debug($line, $fields) : $logger->info($line, $fields);
+            $context = [];
+            foreach ($fields as $key => $value) {
+                $context[$key] = is_string($value) ? self::escape($value) : $value;
+            }
+            $level === 'debug' ? $logger->debug($line, $context) : $logger->info($line, $context);
         }
     }
 
@@ -85,14 +100,25 @@ final class Log
         }
     }
 
+    /** El valor como va adentro de las comillas: \\, \", \n, \r, \t y \u00XX. */
+    private static function escape(string $text): string
+    {
+        return (string) preg_replace_callback(
+            self::ESCAPE,
+            static fn(array $char): string => self::ESCAPES[$char[0]]
+                ?? sprintf('\u%04x', ord($char[0])),
+            $text,
+        );
+    }
+
     /** @param array<string, string|int> $props */
     private static function logfmt(array $props): string
     {
         $parts = [];
         foreach ($props as $key => $value) {
             $text = (string) $value;
-            if ($text === '' || strpbrk($text, ' ="\\') !== false) {
-                $text = '"' . \str_replace(['\\', '"'], ['\\\\', '\\"'], $text) . '"';
+            if ($text === '' || \preg_match(self::QUOTE, $text) === 1) {
+                $text = '"' . self::escape($text) . '"';
             }
             $parts[] = "{$key}={$text}";
         }

@@ -118,7 +118,9 @@ final class Requestor
         if (!\str_starts_with($path, '/')) {
             throw new \ValueError('La ruta tiene que empezar con /, como /v1/balance.');
         }
-        if (\preg_match('/\A[\x21-\x7e]+\z/', $path) !== 1 || strpbrk($path, '?#') !== false) {
+        // ASCII visible, sin query ni fragmento y sin \, como en Python y Node (fetch convierte
+        // \ en /): los ids van con rawurlencode().
+        if (\preg_match('/\A[\x21-\x7e]+\z/', $path) !== 1 || strpbrk($path, '?#\\') !== false) {
             throw new \ValueError(
                 'La ruta va sin query (usá params) y con los ids codificados con rawurlencode().',
             );

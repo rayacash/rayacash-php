@@ -346,6 +346,18 @@ final class ClientTest extends TestCase
         yield 'con espacios alrededor' => ["  https://api.raya.cash/\n", 'https://api.raya.cash'];
         yield 'con varias barras finales' => ['https://api.raya.cash//', 'https://api.raya.cash'];
         yield 'LOCALHOST' => ['http://LOCALHOST:8000', 'http://LOCALHOST:8000'];
+        // Una query o un fragmento vacíos cuentan como ausentes, y el ? o el # no quedan en la
+        // api_base (las requests irían a /?/v1/… o a /), como en Python y Node.
+        yield 'con query vacía' => ['https://api.raya.cash?', 'https://api.raya.cash'];
+        yield 'con fragmento vacío' => ['https://api.raya.cash#', 'https://api.raya.cash'];
+        yield 'con la barra, la query y el fragmento vacíos' => [
+            'https://api.raya.cash/?#',
+            'https://api.raya.cash',
+        ];
+        yield 'localhost con una ruta y query vacía' => [
+            'http://localhost:8000/raya/?',
+            'http://localhost:8000/raya',
+        ];
     }
 
     #[DataProvider('validApiBases')]
@@ -1052,10 +1064,15 @@ final class ClientTest extends TestCase
             [],
             'Un GET no lleva body: mandá los filtros en params.',
         ];
-        // PHP: la ruta va sin query, en ASCII visible y con los ids codificados.
+        // La ruta va sin query ni fragmento, como en Python y Node.
         $path = 'La ruta va sin query (usá params) y con los ids codificados con rawurlencode().';
         yield 'con query' => ['get', '/v1/transfers?limit=1', null, null, [], $path];
         yield 'con fragmento' => ['get', '/v1/transfers#x', null, null, [], $path];
+        // Ni \ ni caracteres de control, como en Python y Node (fetch convierte \ en / y saca los
+        // saltos y los tabs). El id con \ va codificado: %5C.
+        yield 'con \\' => ['get', '/v1/transfers/a\\b', null, null, [], $path];
+        yield 'con un tab' => ['get', "/v1/transfers/a\tb", null, null, [], $path];
+        // PHP: y en ASCII visible, con los ids codificados (Python y Node codifican el resto).
         yield 'con un espacio' => ['get', '/v1/transfers/a b', null, null, [], $path];
         yield 'con una ñ' => ['get', '/v1/transfers/ñ', null, null, [], $path];
     }

@@ -431,8 +431,8 @@ final class RequestsTest extends TestCase
         );
         self::assertSame('La API respondió algo que no es una lista.', $error->getMessage());
         self::assertSame(200, $error->getHttpStatus());
-        // PHP: con la respuesta, como el resto de los errores (invariante 6). Python y Node acá
-        // traen solo el status (una divergencia declarada en el CHANGELOG).
+        // Con la respuesta, como el resto de los errores (invariante 6), igual que en Python y
+        // Node.
         self::assertSame('req_test00000000000000000001', $error->getRequestId());
         self::assertSame('application/json', $error->getHttpHeaders()->get('content-type'));
         self::assertSame(Fixtures::BALANCE, json_decode((string) $error->getHttpBody(), true));
@@ -688,12 +688,153 @@ final class RequestsTest extends TestCase
         );
 
         // Un valor con comillas o barras invertidas va entre comillas, con las dos escapadas
-        // (el _logfmt de Python): una Idempotency-Key puede traer las dos.
+        // (logfmtValues()): una Idempotency-Key puede traer las dos.
         $this->api->add(201, Fixtures::PAYMENT_PENDING);
         $client->payments->create(['amount' => 15000], ['idempotency_key' => 'k"1\\x']);
         self::assertContains(
             'message="Detalle de la request" query="" idempotency_key="k\"1\\\\x"',
             $this->logLines,
+        );
+    }
+
+    /**
+     * Un valor nunca parte la línea ni arma otra: va entre comillas si está vacío o tiene un
+     * espacio, =, ", \, un carácter de control (U+0000 a U+001F) o DEL. Adentro, \ y " van como
+     * \\ y \", los saltos como \n, \r y \t, y el resto de los controles como \u00XX; lo demás
+     * (también lo que no es ASCII) va tal cual. Las mismas líneas que Python y Node.
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function logfmtValues(): iterable
+    {
+        yield 'sin nada que escapar' => ['req_1', 'req_1'];
+        yield 'vacío' => ['', '""'];
+        yield 'un espacio' => ['a b', '"a b"'];
+        yield 'un =' => ['a=b', '"a=b"'];
+        yield 'un salto de línea' => ["a\nb", '"a\nb"'];
+        yield 'un retorno de carro' => ["\r", '"\r"'];
+        yield 'un tab' => ["\t", '"\t"'];
+        yield 'un escape ANSI' => ["\x1b[31m", '"\u001b[31m"'];
+        yield 'DEL' => ["\x7f", '"\u007f"'];
+        yield 'NUL y otros controles' => [
+            "\x00\x08\x0b\x0c\x1f",
+            '"\u0000\u0008\u000b\u000c\u001f"',
+        ];
+        yield 'una comilla' => ['"', '"\""'];
+        yield 'una barra invertida' => ['\\', '"\\\\"'];
+        yield 'todo junto' => ["a b\"\\\n\r\t\x1b[31m\x7f", '"a b\"\\\\\n\r\t\u001b[31m\u007f"'];
+        yield 'fuera de ASCII' => ['ñandú', 'ñandú'];
+    }
+
+    #[DataProvider('logfmtValues')]
+    public function testLogfmtEscapesEveryValue(string $value, string $expected): void
+    {
+        Log::resetEnv('info');
+        Log::info('Prueba', ['value' => $value]);
+        self::assertSame(["message=Prueba value={$expected}"], $this->logLines);
+    }
+
+    /**
+     * Nada de lo que llega de afuera arma una línea falsa ni pinta la terminal: ni un filtro de
+     * quien llama ni el request id o el código de error que manda el servidor.
+     */
+    public function testLogLinesCannotBeForged(): void
+    {
+        Log::resetEnv('debug');
+        Timing::$monotonic = static fn(): float => 0.0;
+        $this->api->addError(
+            500,
+            "X\nmessage=Falsa",
+            headers: ['Raya-Request-Id' => "req_1\x1b[2J"],
+        );
+        $this->api->add(
+            200,
+            ['object' => 'list', 'data' => [], 'has_more' => false, 'next_cursor' => null],
+        );
+        $this->api->client()->transfers->list(['cursor' => "c1\nmessage=Falsa"]);
+        $request = 'message="Request a la API de Raya" method=GET path=/v1/transfers attempt=';
+        $detail = 'message="Detalle de la request" query="cursor=c1\nmessage=Falsa" '
+            . 'idempotency_key=""';
+        self::assertSame(
+            [
+                $request . '1',
+                $detail,
+                'message="Respuesta de la API de Raya" method=GET path=/v1/transfers status=500 '
+                    . 'request_id="req_1\u001b[2J" elapsed=0.000s',
+                'message="Reintentando la request" method=GET path=/v1/transfers retry=1 '
+                    . 'reason="X\nmessage=Falsa" delay=0.50s',
+                $request . '2',
+                $detail,
+                'message="Respuesta de la API de Raya" method=GET path=/v1/transfers status=200 '
+                    . 'request_id=req_test00000000000000000002 elapsed=0.000s',
+            ],
+            $this->logLines,
+        );
+    }
+
+    /**
+     * PHP: el contexto del logger de setLogger() lleva los campos escapados como adentro de las
+     * comillas de la línea. Así, un logger que interpola {campo} en el mensaje (el
+     * PsrLogMessageProcessor de Monolog, que Laravel prende de fábrica) o que vuelve a poner los
+     * saltos del contexto en JSON (el LineFormatter de Laravel) tampoco parte una línea ni arma
+     * otra. Antes recibía los valores crudos.
+     */
+    public function testALoggerGetsTheFieldsEscaped(): void
+    {
+        $logger = new class implements LoggerInterface {
+            /** @var list<string> */
+            public array $lines = [];
+
+            /** @var list<array<string, mixed>> */
+            public array $contexts = [];
+
+            /** @param array<string, mixed> $context */
+            public function info(string $message, array $context = []): void
+            {
+                $this->debug($message, $context);
+            }
+
+            /** @param array<string, mixed> $context */
+            public function debug(string $message, array $context = []): void
+            {
+                $this->contexts[] = $context;
+                // Como PsrLogMessageProcessor: cada {campo} del mensaje, por su valor.
+                $replace = [];
+                foreach ($context as $key => $value) {
+                    $replace['{' . $key . '}'] = \is_scalar($value) ? (string) $value : '';
+                }
+                // Como LineFormatter con allowInlineLineBreaks: el contexto en JSON, con sus \n y
+                // \r de vuelta como saltos.
+                $json = (string) json_encode($context);
+                $json = (string) preg_replace('/(?<!\\\\)\\\\[rn]/', "\n", $json);
+                $this->lines[] = strtr($message, $replace) . ' ' . $json;
+            }
+        };
+        RayaCash::setLogger($logger);
+        Timing::$monotonic = static fn(): float => 0.0;
+        $this->api->add(
+            200,
+            ['object' => 'list', 'data' => [], 'has_more' => false, 'next_cursor' => null],
+        );
+        // Cada mecanismo, por su lado, partía la línea: {query} trae el valor crudo al mensaje, y
+        // el \n del JSON del contexto vuelve a ser un salto.
+        $forged = "\n[2026-11-02 15:00:00] production.CRITICAL: Retiro aprobado\x1b[0m";
+        $this->api->client()->transfers->list(['cursor' => 'a"b\\c{query}' . $forged]);
+        // La request, su detalle y la respuesta: tres líneas, sin un salto ni un control adentro.
+        self::assertCount(3, $logger->lines);
+        self::assertSame([], preg_grep('/[\x00-\x1f\x7f]/', $logger->lines));
+        self::assertSame(
+            [
+                'query' => 'cursor=a\"b\\\\c{query}\n[2026-11-02 15:00:00] production.CRITICAL: '
+                    . 'Retiro aprobado\u001b[0m',
+                'idempotency_key' => '',
+            ],
+            $logger->contexts[1] ?? null,
+        );
+        // Lo que no hay que escapar llega igual, y los números siguen siendo números.
+        self::assertSame(
+            ['method' => 'GET', 'path' => '/v1/transfers', 'attempt' => 1],
+            $logger->contexts[0] ?? null,
         );
     }
 

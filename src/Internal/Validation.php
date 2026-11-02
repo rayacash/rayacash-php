@@ -53,7 +53,10 @@ final class Validation
         return $key;
     }
 
-    /** Una URL https:// (o http://localhost) sin query ni credenciales, sin la barra final. */
+    /**
+     * Una URL https:// (o http://localhost) sin query ni credenciales, sin la barra final ni el ?
+     * o el # de una query o un fragmento vacíos.
+     */
     public static function apiBase(mixed $value): string
     {
         if (!is_string($value)) {
@@ -69,7 +72,9 @@ final class Validation
                 . 'http://localhost para desarrollo local).',
             );
         }
-        return rtrim($url, '/');
+        // La query y el fragmento llegan acá vacíos: un ? o un # solo pueden estar al final, y
+        // dejarlos mandaría las requests a https://x?/v1/… (o a https://x#/v1/…, que es /).
+        return rtrim($url, '/?#');
     }
 
     /** Segundos por intento: un número finito, mayor que 0. */
@@ -161,7 +166,8 @@ final class Validation
         $host = Text::asciiLower($parts['host'] ?? '');
         $secure = $scheme === 'https' && $host !== '';
         $local = $scheme === 'http' && \in_array($host, self::LOCAL_HOSTS, true);
-        // Una query o un fragmento vacíos ("https://x?") cuentan como ausentes, como en Python.
+        // Una query o un fragmento vacíos ("https://x?") cuentan como ausentes, como en Python y
+        // Node (apiBase() les saca el ? o el #).
         $extra = ($parts['query'] ?? '') . ($parts['fragment'] ?? '') . ($parts['user'] ?? '')
             . ($parts['pass'] ?? '');
         return ($secure || $local) && $extra === '';
