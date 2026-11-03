@@ -525,3 +525,5 @@ Para publicar una versión: actualizá `RayaCash::VERSION` (en `src/RayaCash.php
 ---
 
 Referencia de la API: https://raya.cash/api · Soporte: soporte@raya.cash
+
+Raya Cash S.A
