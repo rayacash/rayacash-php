@@ -116,7 +116,7 @@ echo $payment->getLastResponse()?->requestId;
 
 ## Estilo global
 
-Si venís de stripe-php, también podés configurar una clave para todo el proceso y llamar a las clases:
+También podés configurar una clave para todo el proceso y llamar a las clases:
 
 ```php
 use RayaCash\Balance;
