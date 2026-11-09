@@ -11,7 +11,8 @@ use RayaCash\Internal\Text;
  * Una request lista para mandar. La arma el SDK; tu HttpClientInterface la recibe.
  *
  * La clave secreta no es una propiedad: sale recién en headers() (el header Authorization), así
- * no aparece en var_dump, var_export, json_encode ni en las trazas de un error.
+ * no aparece en var_dump, var_export, json_encode ni en las trazas de un error. La única request
+ * sin Authorization es la de `oauth->token` (la app se identifica en el body).
  */
 final class Request
 {
@@ -32,7 +33,7 @@ final class Request
     /** @var array<string, string> Sin Authorization. */
     private readonly array $headers;
 
-    private readonly Secret $apiKey;
+    private readonly ?Secret $apiKey;
 
     /**
      * @internal La arma el SDK.
@@ -43,7 +44,7 @@ final class Request
         string $url,
         array $headers,
         #[\SensitiveParameter]
-        Secret $apiKey,
+        ?Secret $apiKey,
         ?string $body,
         float $timeout,
         float $connectTimeout,
@@ -58,13 +59,16 @@ final class Request
     }
 
     /**
-     * Los headers a mandar: Authorization, Accept, User-Agent y, si corresponde, Content-Type e
-     * Idempotency-Key.
+     * Los headers a mandar: Authorization (salvo en oauth->token), Accept, User-Agent y, si
+     * corresponde, Content-Type e Idempotency-Key.
      *
      * @return array<string, string>
      */
     public function headers(): array
     {
+        if ($this->apiKey === null) {
+            return $this->headers;
+        }
         return ['Authorization' => 'Bearer ' . $this->apiKey->reveal()] + $this->headers;
     }
 
@@ -87,10 +91,13 @@ final class Request
      */
     public function __debugInfo(): array
     {
+        $authorization = $this->apiKey === null
+            ? []
+            : ['Authorization' => 'Bearer ' . $this->apiKey->masked()];
         return [
             'method' => $this->method,
             'url' => $this->url,
-            'headers' => ['Authorization' => 'Bearer ' . $this->apiKey->masked()] + $this->headers,
+            'headers' => $authorization + $this->headers,
             'timeout' => $this->timeout,
             'connectTimeout' => $this->connectTimeout,
         ];

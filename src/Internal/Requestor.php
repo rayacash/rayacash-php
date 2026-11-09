@@ -31,6 +31,9 @@ final class Requestor
      * @param array<string, string> $query
      * @param array<array-key, mixed>|\stdClass|null $body
      * @param class-string<RayaObject>|null $expected
+     * @param bool $authenticated false solo para POST /v1/oauth/token, la única request sin
+     *     Authorization: no exige clave y no genera una Idempotency-Key (el servidor no la usa
+     *     ahí).
      */
     public function request(
         string $method,
@@ -39,8 +42,9 @@ final class Requestor
         array|\stdClass|null $body,
         RequestOptions $options,
         ?string $expected = null,
+        bool $authenticated = true,
     ): RayaObject {
-        $prepared = $this->prepare($method, $path, $query, $body, $options);
+        $prepared = $this->prepare($method, $path, $query, $body, $options, $authenticated);
         $response = $this->send($prepared);
         return $this->hydrate($prepared, $response, $expected);
     }
@@ -62,8 +66,9 @@ final class Requestor
         RequestOptions $options,
         array $query = [],
         array|\stdClass|null $body = null,
+        bool $authenticated = true,
     ): RayaObject {
-        $object = $this->request($method, $path, $query, $body, $options, $class);
+        $object = $this->request($method, $path, $query, $body, $options, $class, $authenticated);
         if (!$object instanceof $class) {
             // Con la respuesta, como todo error de la API: en un POST, la clave permite
             // reintentar sin ejecutarlo dos veces.
@@ -110,6 +115,7 @@ final class Requestor
         array $query,
         array|\stdClass|null $body,
         RequestOptions $options,
+        bool $authenticated,
     ): Prepared {
         $verb = Text::asciiUpper($method);
         if ($verb !== 'GET' && $verb !== 'POST') {
@@ -126,9 +132,12 @@ final class Requestor
             );
         }
 
-        // Sin clave sale API_KEY_MISSING antes de cualquier I/O.
-        $apiKey = $options->apiKey() ?? $this->config->apiKey() ?? Secret::of('');
-        Validation::apiKey($apiKey->reveal());
+        $apiKey = null;
+        if ($authenticated) {
+            // Sin clave sale API_KEY_MISSING antes de cualquier I/O.
+            $apiKey = $options->apiKey() ?? $this->config->apiKey() ?? Secret::of('');
+            Validation::apiKey($apiKey->reveal());
+        }
 
         $headers = ['Accept' => 'application/json', 'User-Agent' => $this->config->userAgent()];
         $content = null;
@@ -143,9 +152,16 @@ final class Requestor
         $idempotencyKey = null;
         if ($verb === 'POST') {
             // Una sola clave por llamada, la misma en cada reintento: nunca se ejecuta dos veces.
+            // Sin autenticación (oauth->token) no se genera: el servidor no la usa ahí.
             $given = $options->get('idempotency_key');
-            $idempotencyKey = $given !== null ? Encoding::idempotencyKey($given) : Uuid::v4();
-            $headers['Idempotency-Key'] = $idempotencyKey;
+            if ($given !== null) {
+                $idempotencyKey = Encoding::idempotencyKey($given);
+            } elseif ($authenticated) {
+                $idempotencyKey = Uuid::v4();
+            }
+            if ($idempotencyKey !== null) {
+                $headers['Idempotency-Key'] = $idempotencyKey;
+            }
         } elseif ($options->has('idempotency_key')) {
             throw new \ValueError('La Idempotency-Key solo va en los POST.');
         }
@@ -247,7 +263,7 @@ final class Requestor
         $message = $e->isTimeout()
             ? 'La API de Raya no respondió a tiempo.'
             : "No pudimos conectarnos con la API de Raya ({$e->getDetail()}).";
-        if ($p->method === 'POST') {
+        if ($p->idempotencyKey !== null) {
             $message .= ' Reintentá con la misma Idempotency-Key: nunca se ejecuta dos veces.';
         }
         return new ApiConnectionException(

@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 namespace RayaCash\Tests\Types\Data;
 
+use RayaCash\Checkout;
 use RayaCash\Payment;
 use RayaCash\RayaClient;
 use RayaCash\Webhook;
@@ -74,4 +75,27 @@ function expectErrors(RayaClient $client, Payment $payment, ?string $header, str
     // La clave también puede ir en config: (sin el primer argumento), y es un string.
     // error: argument.type: $config
     new RayaClient(config: ['api_key' => 8812]);
+
+    // client_id es el número de la aplicación, pero va entre comillas: como string.
+    // error: argument.type: Parameter #1 $params
+    $client->oauth->token([
+        'client_id' => 7650337728110670,
+        'client_secret' => 'raya_cs_live_x',
+        'code' => 'c0d3',
+        'redirect_uri' => 'https://tienda.example.com/raya/callback',
+    ]);
+
+    // items es una lista de ítems, no un solo ítem.
+    // error: argument.type: Parameter #1 $params
+    $client->checkout->orders->create(['items' => ['title' => 'x', 'quantity' => 1]]);
+
+    // fee es un monto, no un bool.
+    // error: argument.type: Parameter #1 $params
+    $client->checkout->orders->create(['items' => [], 'fee' => true]);
+
+    // Por id, con el estilo global, es Checkout::refundById(): refund() es del checkout que ya
+    // tenés.
+    // error: method.staticCall: Static call to instance method RayaCash\Checkout::refund()
+    // error: argument.type: Parameter #1 $options
+    Checkout::refund('id');
 }

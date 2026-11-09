@@ -18,8 +18,11 @@ use RayaCash\Internal\Text;
 use RayaCash\Internal\UserAgent;
 use RayaCash\Internal\Validation;
 use RayaCash\Service\BalanceService;
+use RayaCash\Service\CheckoutService;
+use RayaCash\Service\OAuthService;
 use RayaCash\Service\PaymentService;
 use RayaCash\Service\TransferService;
+use RayaCash\Service\UserService;
 
 /**
  * Cliente de la API de Raya Cash.
@@ -32,6 +35,10 @@ use RayaCash\Service\TransferService;
  * La clave secreta va solo en tu servidor, leída de una variable de entorno o de tu config:
  * nunca en el navegador, en una app mobile ni en el repositorio. Todo lo que pasás se valida al
  * construirlo, antes de cualquier request.
+ *
+ * Si tu aplicación cobra a nombre de otras cuentas, un RayaClient armado con el access_token de
+ * la cuenta conectada (raya_at_live_…) opera por ella: `$connected->users` y
+ * `$connected->checkout->orders`. `$client->oauth->token()` no necesita clave.
  *
  * @final
  */
@@ -55,6 +62,15 @@ class RayaClient
     /** Cobrar por transferencia, con un CVU exclusivo por pago. */
     public readonly PaymentService $payments;
 
+    /** Canjear el code de una cuenta que conectó tu aplicación por su access_token. */
+    public readonly OAuthService $oauth;
+
+    /** Los datos de las cuentas que conectaron tu aplicación (con su access_token). */
+    public readonly UserService $users;
+
+    /** Cobrar a nombre de una cuenta conectada, con tu comisión (con su access_token). */
+    public readonly CheckoutService $checkout;
+
     private readonly ClientConfig $config;
     private readonly Requestor $requestor;
 
@@ -63,7 +79,8 @@ class RayaClient
      * ['timeout' => 90]), new RayaClient(['api_key' => …, 'timeout' => 90]) o
      * new RayaClient(config: ['timeout' => 90]). Un valor en null usa el de por defecto.
      *
-     * - api_key: tu clave secreta (raya_sk_live_…). Si no la pasás, se lee de RAYA_SECRET_KEY.
+     * - api_key: tu clave secreta (raya_sk_live_…) o el access_token de una cuenta conectada
+     *   (raya_at_live_…). Si no la pasás, se lee de RAYA_SECRET_KEY.
      * - api_base: por defecto, https://api.raya.cash.
      * - timeout: segundos por intento (por defecto 65, con 10 para conectar). El servidor corta a
      *   los 60 s y crear un pago puede tardar ~40 s.
@@ -169,6 +186,9 @@ class RayaClient
         $this->balance = new BalanceService($this->requestor);
         $this->transfers = new TransferService($this->requestor);
         $this->payments = new PaymentService($this->requestor);
+        $this->oauth = new OAuthService($this->requestor);
+        $this->users = new UserService($this->requestor);
+        $this->checkout = new CheckoutService($this->requestor);
     }
 
     /**

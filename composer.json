@@ -1,6 +1,6 @@
 {
     "name": "rayacash/rayacash-php",
-    "description": "SDK oficial de PHP para la API de Raya Cash: pagos por transferencia, transferencias, balance y webhooks.",
+    "description": "SDK oficial de PHP para la API de Raya Cash: pagos por transferencia, transferencias, balance, webhooks y checkouts de apps a nombre de cuentas conectadas.",
     "type": "library",
     "keywords": [
         "raya",
@@ -11,7 +11,10 @@
         "cbu",
         "argentina",
         "api",
-        "sdk"
+        "sdk",
+        "oauth",
+        "checkout",
+        "marketplace"
     ],
     "homepage": "https://raya.cash/api",
     "license": "MIT",

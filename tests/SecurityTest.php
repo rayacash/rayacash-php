@@ -6,6 +6,7 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
+use RayaCash\Checkout;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
@@ -22,6 +23,7 @@ use RayaCash\HttpClient\TransportException;
 use RayaCash\Internal\GlobalState;
 use RayaCash\Internal\Secret;
 use RayaCash\ListObject;
+use RayaCash\OAuth;
 use RayaCash\Payment;
 use RayaCash\RayaCash;
 use RayaCash\RayaClient;
@@ -29,6 +31,7 @@ use RayaCash\Tests\Support\Fixtures;
 use RayaCash\Tests\Support\MockApi;
 use RayaCash\Tests\Support\TestCase;
 use RayaCash\Transfer;
+use RayaCash\User;
 use RayaCash\Webhook;
 use RayaCash\WebhookSignature;
 
@@ -60,6 +63,15 @@ final class SecurityTest extends TestCase
     ];
 
     private const MASKED = 'raya_sk_live_…IJKL';
+
+    private const TOKEN_PARAMS = [
+        'client_id' => Fixtures::CLIENT_ID,
+        'client_secret' => Fixtures::CLIENT_SECRET,
+        'code' => Fixtures::CODE,
+        'redirect_uri' => Fixtures::REDIRECT_URI,
+    ];
+
+    private const ITEM = ['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000];
 
     /** La contraseña de un proxy o de un certificado, en las opciones de un CurlClient. */
     private const PROXY_PASSWORD = 'proxyPASSWORDs3cr3t';
@@ -122,6 +134,59 @@ final class SecurityTest extends TestCase
         );
         self::assertStringContainsString('"' . self::MASKED . '"', $shown['client: var_dump']);
         self::assertStringContainsString(self::MASKED, $shown['client: debug_zval_dump']);
+    }
+
+    /**
+     * El access_token de una cuenta conectada es una clave más: un RayaClient armado con él lo
+     * enmascara igual (raya_at_live_…9hJk) y ningún volcado del cliente, de la request, de la
+     * respuesta ni de los objetos lo muestra.
+     */
+    public function testConnectedClientNeverShowsTheAccessToken(): void
+    {
+        $connected = new RayaClient(Fixtures::ACCESS_TOKEN, ['http_client' => $this->api]);
+        $this->api->add(200, Fixtures::USER);
+        $user = $connected->users->retrieve('me');
+        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
+        $checkout = $connected->checkout->orders->create(['items' => [self::ITEM], 'fee' => 500]);
+        self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->authorization());
+
+        $shown = self::dumps('connected', $connected)
+            + self::dumps('user', $user)
+            + self::dumps('checkout', $checkout)
+            + self::dumps('request', $this->api->last()->request)
+            + self::dumps('response', $checkout->getLastResponse());
+        self::assertNoSecrets($shown);
+        self::assertStringContainsString('raya_at_live_…9hJk', $shown['connected: print_r']);
+        self::assertStringContainsString('Bearer raya_at_live_…9hJk', $shown['request: print_r']);
+    }
+
+    /**
+     * El OAuthToken trae el access_token entero para guardarlo (->access_token, toArray(),
+     * json_encode y serialize), pero lo que se mira por mirar (var_dump, print_r,
+     * debug_zval_dump y (string)) lo enmascara, como un RayaClient con su clave.
+     */
+    public function testOAuthTokenMasksTheAccessTokenWhenShown(): void
+    {
+        $this->api->add(200, Fixtures::OAUTH_TOKEN);
+        $token = $this->api->client(null)->oauth->token(self::TOKEN_PARAMS);
+        $shown = self::dumps('token', $token);
+        $secret = substr(Fixtures::ACCESS_TOKEN, strlen('raya_at_live_'));
+        foreach (['var_dump', 'print_r', 'debug_zval_dump', '(string)'] as $how) {
+            self::assertStringNotContainsString($secret, $shown["token: {$how}"], $how);
+            self::assertStringContainsString('raya_at_live_…9hJk', $shown["token: {$how}"], $how);
+        }
+        foreach (['json_encode', 'serialize', 'var_export', '(array)'] as $how) {
+            self::assertStringContainsString(Fixtures::ACCESS_TOKEN, $shown["token: {$how}"], $how);
+        }
+        self::assertSame(Fixtures::ACCESS_TOKEN, $token->access_token);
+        // La request del canje no llevó Authorization, y el client_secret no se muestra en los
+        // volcados de la request: va en el body, que var_dump y print_r no muestran.
+        $request = $this->api->last()->request;
+        self::assertArrayNotHasKey('Authorization', $request->headers());
+        $shown = self::dumps('request', $request);
+        foreach (['var_dump', 'print_r', 'debug_zval_dump'] as $how) {
+            self::assertStringNotContainsString(Fixtures::CLIENT_SECRET, $shown["request: {$how}"]);
+        }
     }
 
     /**
@@ -418,6 +483,16 @@ final class SecurityTest extends TestCase
             '$payment->refund' => static fn(): mixed => Payment::constructFrom(
                 ['object' => 'payment', 'id' => 'p'],
             )->refund($other),
+            'User::retrieve' => static fn(): mixed => User::retrieve('u', $other),
+            'Checkout::create' => static fn(): mixed => Checkout::create(
+                ['items' => [self::ITEM]],
+                $other,
+            ),
+            'Checkout::retrieve' => static fn(): mixed => Checkout::retrieve('c', $other),
+            'Checkout::refundById' => static fn(): mixed => Checkout::refundById('c', $other),
+            '$checkout->refund' => static fn(): mixed => Checkout::constructFrom(
+                ['object' => 'checkout', 'id' => 'c'],
+            )->refund($other),
         ];
         foreach ($global as $name => $call) {
             yield "ApiException de {$name} con una clave por llamada" => [
@@ -431,6 +506,24 @@ final class SecurityTest extends TestCase
                 true,
             ];
         }
+        // oauth->token no acepta api_key (no lleva Authorization): el error sale antes de mandar
+        // nada, con las opciones (y los parámetros, que llevan el client_secret) sensibles.
+        yield 'TypeError: api_key en oauth->token' => [
+            \TypeError::class,
+            static fn(MockApi $api): mixed => $api->client(null)->oauth->token(
+                self::TOKEN_PARAMS,
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            true,
+        ];
+        yield 'TypeError: api_key en OAuth::token' => [
+            \TypeError::class,
+            static fn(MockApi $api): mixed => OAuth::token(
+                self::TOKEN_PARAMS,
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            true,
+        ];
         yield 'ApiException de rawRequest' => [
             ApiException::class,
             static function (MockApi $api): mixed {
@@ -771,6 +864,103 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             '$payment->refund recibe 1 argumento (options), no 2',
         ];
+        yield 'oauth->token' => [
+            static fn(MockApi $api): mixed => $api->client(null)->oauth->token(
+                self::TOKEN_PARAMS,
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'oauth->token recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'users->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->users->retrieve(
+                'u',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'users->retrieve recibe 2 argumentos (userId y options), no 3',
+        ];
+        yield 'checkout->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+                ['items' => [self::ITEM]],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'checkout->orders->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'checkout->orders->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->checkout->orders->retrieve(
+                'c',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'checkout->orders->retrieve recibe 2 argumentos (checkoutId y options), no 3',
+        ];
+        yield 'checkout->orders->refund' => [
+            static fn(MockApi $api): mixed => $api->client()->checkout->orders->refund(
+                'c',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'checkout->orders->refund recibe 2 argumentos (checkoutId y options), no 3',
+        ];
+        yield 'OAuth::token' => [
+            static fn(MockApi $api): mixed => OAuth::token(
+                self::TOKEN_PARAMS,
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'OAuth::token recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'User::retrieve' => [
+            static fn(MockApi $api): mixed => User::retrieve(
+                'u',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'User::retrieve recibe 2 argumentos (userId y options), no 3',
+        ];
+        yield 'Checkout::create' => [
+            static fn(MockApi $api): mixed => Checkout::create(
+                ['items' => [self::ITEM]],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'Checkout::create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'Checkout::retrieve' => [
+            static fn(MockApi $api): mixed => Checkout::retrieve(
+                'c',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'Checkout::retrieve recibe 2 argumentos (checkoutId y options), no 3',
+        ];
+        yield 'Checkout::refundById' => [
+            static fn(MockApi $api): mixed => Checkout::refundById(
+                'c',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'Checkout::refundById recibe 2 argumentos (checkoutId y options), no 3',
+        ];
+        yield '$checkout->refund' => [
+            static fn(MockApi $api): mixed => Checkout::constructFrom(
+                ['object' => 'checkout', 'id' => 'c'],
+            )->refund([], ['api_key' => Fixtures::OTHER_KEY]),
+            \ArgumentCountError::class,
+            '$checkout->refund recibe 1 argumento (options), no 2',
+        ];
 
         // Una opción entre los parámetros: el SDK la rechaza («va en las opciones»).
         yield 'api_key entre los parámetros de transfers->create' => [
@@ -806,6 +996,20 @@ final class SecurityTest extends TestCase
             static fn(MockApi $api): mixed => Transfer::list(['apiKey' => Fixtures::OTHER_KEY]),
             \TypeError::class,
             'transfers->list no acepta apiKey entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los parámetros de checkout->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+                ['items' => [self::ITEM], 'api_key' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'checkout->orders->create no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los parámetros de oauth->token' => [
+            static fn(MockApi $api): mixed => $api->client(null)->oauth->token(
+                [...self::TOKEN_PARAMS, 'api_key' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'oauth->token no acepta api_key entre los parámetros: va en las opciones',
         ];
     }
 
@@ -1329,6 +1533,7 @@ final class SecurityTest extends TestCase
         $secrets = [
             'TEST_KEY' => substr(Fixtures::TEST_KEY, $prefix),
             'OTHER_KEY' => substr(Fixtures::OTHER_KEY, $prefix),
+            'ACCESS_TOKEN' => substr(Fixtures::ACCESS_TOKEN, strlen('raya_at_live_')),
             'WEBHOOK_SECRET' => Fixtures::WEBHOOK_SECRET,
             'PROXY_PASSWORD' => self::PROXY_PASSWORD,
         ];

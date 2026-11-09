@@ -21,6 +21,9 @@ final class Params
         'idempotencyKey' => 'idempotency_key',
     ];
 
+    private const LIST_METADATA = ', no una lista. Si sus claves son "0", "1"…, PHP la convirtió '
+        . 'en una: mandala como (object) $metadata.';
+
     /** @codeCoverageIgnore No se instancia: solo tiene métodos estáticos. */
     private function __construct() {}
 
@@ -91,6 +94,26 @@ final class Params
             )));
         }
         return $params;
+    }
+
+    /**
+     * La metadata de un pago o de un checkout, siempre como objeto JSON: un [] vacío de PHP sería
+     * una lista, y la API la rechaza. Una lista suele ser un error (['8812'] por
+     * ['cliente_id' => '8812']), pero PHP también convierte en lista las claves "0", "1"…: el
+     * mensaje dice cómo mandarlas. null si no vino.
+     */
+    public static function metadata(mixed $metadata): ?\stdClass
+    {
+        if ($metadata === null || $metadata instanceof \stdClass) {
+            return $metadata;
+        }
+        if (is_array($metadata) && ($metadata === [] || !array_is_list($metadata))) {
+            return (object) $metadata;
+        }
+        throw self::withoutArguments(new \TypeError(
+            "metadata tiene que ser un array de string a string, como ['cliente_id' => '8812']"
+            . (is_array($metadata) ? self::LIST_METADATA : '.'),
+        ));
     }
 
     /**
