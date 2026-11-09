@@ -171,7 +171,8 @@ final class ClientTest extends TestCase
         );
         // Dice dónde ponerla, con los nombres de PHP (Python: RayaClient(api_key=…)).
         self::assertSame(
-            "Falta la clave secreta: pasala a new RayaClient('raya_sk_live_…'), configurala con "
+            'Falta la clave: pasá tu clave secreta (raya_sk_live_…) o el access_token de una '
+            . 'cuenta conectada (raya_at_live_…) a new RayaClient(…), configurala con '
             . 'RayaCash::setApiKey() o definí la variable de entorno RAYA_SECRET_KEY.',
             $error->getMessage(),
         );
@@ -218,7 +219,8 @@ final class ClientTest extends TestCase
             static fn() => new RayaClient(123),
         );
         // En el array de opciones PHP no convierte nada: el TypeError es del SDK.
-        $message = 'La clave secreta tiene que ser un string, no int.';
+        $message = 'La clave secreta (o el access_token de una cuenta conectada) tiene que ser un '
+            . 'string, no int.';
         self::assertThrows(
             \TypeError::class,
             // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
@@ -259,7 +261,34 @@ final class ClientTest extends TestCase
             \TypeError::class,
             // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
             static fn() => $client->balance->retrieve(['api_key' => 123]),
-            'La clave secreta tiene que ser un string, no int.',
+            'La clave secreta (o el access_token de una cuenta conectada) tiene que ser un string, '
+                . 'no int.',
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    /**
+     * El access_token de una cuenta conectada (raya_at_live_…) es una clave más: viaja igual, se
+     * valida igual y se enmascara igual. Lo que sigue sin valer es la clave pública.
+     */
+    public function testAccessTokenIsAKeyToo(): void
+    {
+        $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
+        $this->api->add(200, Fixtures::USER);
+        $connected->users->retrieve('me');
+        self::assertSame(self::bearer(Fixtures::ACCESS_TOKEN), $this->authorization());
+        self::assertSame(
+            ['api_base' => 'https://api.raya.cash', 'api_key' => 'raya_at_live_…9hJk'],
+            $connected->__debugInfo(),
+        );
+        // Por llamada también, y con un cliente armado con la clave secreta.
+        $this->api->add(200, Fixtures::USER);
+        $this->api->client()->users->retrieve('me', ['api_key' => Fixtures::ACCESS_TOKEN]);
+        self::assertSame(self::bearer(Fixtures::ACCESS_TOKEN), $this->authorization());
+        self::assertThrows(
+            AuthenticationException::class,
+            static fn() => new RayaClient(Fixtures::ACCESS_TOKEN . ' '),
+            errorCode: 'API_KEY_INVALID',
         );
         self::assertCount(2, $this->api->requests);
     }
@@ -695,7 +724,7 @@ final class ClientTest extends TestCase
             [
                 static fn() => $keyless->rawRequest('get', '/v1/x', body: $body, options: $all),
                 AuthenticationException::class,
-                'Falta la clave secreta: pasala a new RayaClient',
+                'Falta la clave: pasá tu clave secreta',
             ],
             [
                 static fn() => $client->rawRequest('get', '/v1/x', body: $body, options: $all),

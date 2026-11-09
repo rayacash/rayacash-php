@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace RayaCash\Tests\Types\Data;
 
 use RayaCash\Balance;
+use RayaCash\Checkout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
@@ -22,11 +23,13 @@ use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\HttpClient\HttpClientInterface;
 use RayaCash\HttpClient\Request;
 use RayaCash\HttpClient\Response;
+use RayaCash\OAuth;
 use RayaCash\Payment;
 use RayaCash\RayaCash;
 use RayaCash\RayaClient;
 use RayaCash\RayaObject;
 use RayaCash\Transfer;
+use RayaCash\User;
 use RayaCash\Util\Uuid;
 use RayaCash\Webhook;
 use RayaCash\WebhookSignature;
@@ -99,6 +102,77 @@ function clientStyle(RayaClient $client, \Stringable $decimal): void
         assertType('RayaCash\Payment', $object);
     } elseif ($object instanceof Transfer) {
         assertType('RayaCash\Transfer', $object);
+    } elseif ($object instanceof Checkout) {
+        assertType('RayaCash\Checkout', $object);
+    }
+}
+
+/** Apps y cuentas conectadas: el canje del code, la cuenta y sus checkouts. */
+function appsStyle(RayaClient $client, \Stringable $decimal): void
+{
+    $token = $client->oauth->token([
+        'client_id' => '7650337728110670',
+        'client_secret' => 'raya_cs_live_x',
+        'code' => 'c0d3',
+        'redirect_uri' => 'https://tienda.example.com/raya/callback',
+    ]);
+    assertType('RayaCash\OAuthToken', $token);
+    assertType('string', $token->access_token);
+    assertType('string', $token->user_id);
+    assertType('int|null', $token->expires_in);
+    assertType('string|null', $token->refresh_token);
+
+    $connected = new RayaClient($token->access_token);
+    $user = $connected->users->retrieve($token->user_id);
+    assertType('RayaCash\User', $user);
+    assertType("'business'|'personal'", $user->type);
+    assertType("'personal'", User::TYPE_PERSONAL);
+    assertType('RayaCash\User\Identification|null', $user->identification);
+    assertType('string|null', $user->identification?->number);
+    assertType("'F'|'M'|'X'|null", $user->sex);
+    assertType('RayaCash\User\Address|null', $user->address);
+    assertType('string|null', $user->address?->city);
+    assertType('bool', $user->identity_verified);
+    assertType('RayaCash\User\Business|null', $user->business);
+    assertType('RayaCash\User\Representative|null', $user->business?->representative);
+    assertType('RayaCash\User\Merchant|null', $user->merchant);
+    assertType('string|null', $user->merchant?->image);
+
+    $checkout = $connected->checkout->orders->create([
+        'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => $decimal]],
+        'fee' => '500.00',
+        'back_urls' => ['success' => 'https://tienda.example.com/pedidos/1042'],
+        'auto_return' => 'approved',
+        'notification_url' => 'we_x',
+        'expires_in' => 3600,
+        'metadata' => ['pedido_id' => '1042'],
+    ]);
+    assertType('RayaCash\Checkout', $checkout);
+    assertType("'expired'|'failed'|'pending'|'refunded'|'succeeded'", $checkout->status);
+    assertType("'succeeded'", Checkout::STATUS_SUCCEEDED);
+    assertType('float|int', $checkout->fee);
+    assertType('float|int', $checkout->net_amount);
+    assertType('float|int|null', $checkout->amount_received);
+    assertType('list<RayaCash\Checkout\Item>', $checkout->items);
+    assertType('string', $checkout->account);
+    assertType('RayaCash\Checkout\BankTransfer', $checkout->bank_transfer);
+    assertType('RayaCash\Checkout\BackUrls', $checkout->back_urls);
+    assertType('string|null', $checkout->back_urls->success);
+    assertType("'approved'|null", $checkout->auto_return);
+    assertType("'approved'", Checkout::AUTO_RETURN_APPROVED);
+    assertType('string|null', $checkout->notification_url);
+    assertType('RayaCash\Checkout\Payer|null', $checkout->payer);
+    assertType('array<string>', $checkout->metadata);
+    assertType('RayaCash\Checkout', $connected->checkout->orders->retrieve('id'));
+    assertType(
+        'RayaCash\Checkout',
+        $connected->checkout->orders->refund('id', ['idempotency_key' => 'r']),
+    );
+    assertType('RayaCash\Checkout', $checkout->refund());
+    foreach ($checkout->items as $item) {
+        assertType('RayaCash\Checkout\Item', $item);
+        assertType('int', $item->quantity);
+        assertType('float|int', $item->unit_price);
     }
 }
 
@@ -120,6 +194,24 @@ function globalStyle(): void
     assertType('RayaCash\Payment', Payment::refundById('id'));
     // Node.
     assertType('RayaCash\Payment', Payment::constructFrom(['object' => 'payment']));
+    // Apps y cuentas conectadas: OAuth::token no necesita la clave global.
+    assertType(
+        'RayaCash\OAuthToken',
+        OAuth::token([
+            'client_id' => '7650337728110670',
+            'client_secret' => 'raya_cs_live_x',
+            'code' => 'c0d3',
+            'redirect_uri' => 'https://tienda.example.com/raya/callback',
+        ]),
+    );
+    assertType('RayaCash\User', User::retrieve('id'));
+    $checkout = Checkout::create([
+        'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000]],
+    ]);
+    assertType('RayaCash\Checkout', $checkout);
+    assertType('RayaCash\Checkout', $checkout->refund());
+    assertType('RayaCash\Checkout', Checkout::retrieve('id'));
+    assertType('RayaCash\Checkout', Checkout::refundById('id'));
 }
 
 function errors(
@@ -176,11 +268,13 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
     assertType('float|int|null', $payment->amount_received);
     assertType('string|null', $payment->paid_at);
     assertType(
-        "'payment.created'|'payment.failed'|'payment.refunded'|'payment.succeeded'"
+        "'checkout.created'|'checkout.failed'|'checkout.refunded'|'checkout.succeeded'"
+        . "|'payment.created'|'payment.failed'|'payment.refunded'|'payment.succeeded'"
         . "|'transfer.failed'|'transfer.received'|'transfer.sent'|'webhook.test'",
         $event->type,
     );
     assertType("'payment.succeeded'", Event::TYPE_PAYMENT_SUCCEEDED);
+    assertType("'checkout.succeeded'", Event::TYPE_CHECKOUT_SUCCEEDED);
     assertType('string', $balance->currency);
     // Lo que no tiene tipo en la doc, por nombre: mixed (un campo nuevo de la API, por ejemplo).
     assertType('mixed', $payment['campo_nuevo']);

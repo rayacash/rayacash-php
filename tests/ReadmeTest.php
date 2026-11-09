@@ -6,17 +6,21 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
+use RayaCash\Checkout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiConnectionException;
+use RayaCash\Exception\AuthenticationException;
 use RayaCash\Exception\InvalidRequestException;
 use RayaCash\Exception\RayaException;
 use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\ListObject;
+use RayaCash\OAuthToken;
 use RayaCash\Payment;
 use RayaCash\RayaClient;
 use RayaCash\RayaObject;
 use RayaCash\Tests\Support\TestCase;
 use RayaCash\Transfer;
+use RayaCash\User;
 
 /**
  * Los ejemplos del README, de examples/ y de scripts/, como test_readme.py en Python y
@@ -35,16 +39,21 @@ final class ReadmeTest extends TestCase
      */
     private const VARIABLES = [
         'client' => [RayaClient::class],
+        'connected' => [RayaClient::class],
         'balance' => [Balance::class],
         'payment' => [Payment::class],
         'transfer' => [Transfer::class],
         'deposit' => [Transfer::class],
-        'object' => [Payment::class, Transfer::class],
+        'token' => [OAuthToken::class],
+        'user' => [User::class],
+        'checkout' => [Checkout::class],
+        'object' => [Payment::class, Transfer::class, Checkout::class],
         'page' => [ListObject::class],
         'event' => [Event::class],
         'e' => [
             RayaException::class,
             ApiConnectionException::class,
+            AuthenticationException::class,
             InvalidRequestException::class,
             SignatureVerificationException::class,
         ],
@@ -63,6 +72,7 @@ final class ReadmeTest extends TestCase
         'refund',
         'start',
         'today',
+        'account',
     ];
 
     public function testTheReadmeHasPhpExamples(): void
@@ -131,6 +141,17 @@ final class ReadmeTest extends TestCase
             unlink($prepend);
         }
         self::assertSame([0, ''], [$status, $output]);
+    }
+
+    public function testTheDocblocksSayWeForWebhookDestinations(): void
+    {
+        // Los destinos de Developers › Webhooks son we_… (whe_ fue el prefijo de un borrador).
+        $files = self::sourceFiles(dirname(__DIR__) . '/src');
+        self::assertNotEmpty($files);
+        foreach ($files as $file) {
+            self::assertStringNotContainsString('whe_', (string) file_get_contents($file), $file);
+        }
+        self::assertStringNotContainsString('whe_', self::readme());
     }
 
     /** @return iterable<string, array{string}> */
@@ -247,6 +268,29 @@ final class ReadmeTest extends TestCase
     }
 
     // --- Ayudas -------------------------------------------------------------------------------
+
+    /**
+     * Los .php bajo $dir, recursivo.
+     *
+     * @return list<string>
+     */
+    private static function sourceFiles(string $dir): array
+    {
+        $files = [];
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = "{$dir}/{$entry}";
+            if (is_dir($path)) {
+                $files = [...$files, ...self::sourceFiles($path)];
+            } elseif (str_ends_with($entry, '.php')) {
+                $files[] = $path;
+            }
+        }
+
+        return $files;
+    }
 
     private static function readme(): string
     {

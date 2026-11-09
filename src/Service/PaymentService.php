@@ -25,9 +25,6 @@ class PaymentService
         'metadata',
     ];
 
-    private const LIST_METADATA = ', no una lista. Si sus claves son "0", "1"…, PHP la convirtió '
-        . 'en una: mandala como (object) $metadata.';
-
     /** @internal Lo arma RayaClient (o el estilo global). */
     public function __construct(private readonly Requestor $requestor) {}
 
@@ -67,24 +64,13 @@ class PaymentService
             self::CREATE_PARAMS,
             "['amount' => 15000]",
         );
-        $metadata = $values['metadata'] ?? null;
-        if (is_array($metadata) && ($metadata === [] || !array_is_list($metadata))) {
-            // Siempre como objeto JSON: [] vacío sería una lista, y la API la rechaza.
-            $metadata = (object) $metadata;
-        } elseif ($metadata !== null && !$metadata instanceof \stdClass) {
-            // Una lista suele ser un error (['8812'] por ['cliente_id' => '8812']), pero PHP
-            // también convierte en lista las claves "0", "1"…: el mensaje dice cómo mandarlas.
-            throw new \TypeError(
-                "metadata tiene que ser un array de string a string, como ['cliente_id' => '8812']"
-                . (is_array($metadata) ? self::LIST_METADATA : '.'),
-            );
-        }
         $body = [
             'amount' => Encoding::canonicalAmount($values['amount'] ?? null),
             'description' => $values['description'] ?? null,
             'external_reference' => $values['external_reference'] ?? null,
             'return_url' => $values['return_url'] ?? null,
-            'metadata' => $metadata,
+            // Siempre como objeto JSON: [] vacío sería una lista, y la API la rechaza.
+            'metadata' => Params::metadata($values['metadata'] ?? null),
         ];
         return $this->requestor->requestAs(
             Payment::class,

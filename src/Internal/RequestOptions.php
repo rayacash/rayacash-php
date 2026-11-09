@@ -59,11 +59,15 @@ final class RequestOptions
     public function apiKey(): ?Secret
     {
         if ($this->apiKeyType !== null) {
-            throw new \TypeError(
-                "La clave secreta tiene que ser un string, no {$this->apiKeyType}.",
-            );
+            throw new \TypeError(Validation::KEY_TYPE_MESSAGE . $this->apiKeyType . '.');
         }
         return $this->apiKey;
+    }
+
+    /** Si vino una api_key (de cualquier tipo): oauth->token no la acepta. */
+    public function hasApiKey(): bool
+    {
+        return $this->apiKey !== null || $this->apiKeyType !== null;
     }
 
     public function has(string $name): bool

@@ -30,22 +30,33 @@ use RayaCash\Tests\Support\TestCase;
  */
 final class ErrorsTest extends TestCase
 {
-    /** Los 32 códigos del contrato (api.md › Códigos de error). */
+    /** Los 43 códigos del contrato (api.md › Códigos de error). */
     private const CATALOG = [
         ['INVALID_JSON', 400, InvalidRequestException::class],
         ['PARAMETER_MISSING', 400, InvalidRequestException::class],
         ['PARAMETER_INVALID', 400, InvalidRequestException::class],
         ['PARAMETER_UNKNOWN', 400, InvalidRequestException::class],
+        ['OAUTH_GRANT_INVALID', 400, InvalidRequestException::class],
+        ['OAUTH_GRANT_TYPE_UNSUPPORTED', 400, InvalidRequestException::class],
         ['API_KEY_MISSING', 401, AuthenticationException::class],
         ['API_KEY_INVALID', 401, AuthenticationException::class],
         ['API_KEY_PUBLISHABLE_NOT_ALLOWED', 401, AuthenticationException::class],
         ['API_KEY_EXPIRED', 401, AuthenticationException::class],
+        ['ACCESS_TOKEN_MISSING', 401, AuthenticationException::class],
+        ['ACCESS_TOKEN_INVALID', 401, AuthenticationException::class],
+        ['ACCESS_TOKEN_REVOKED', 401, AuthenticationException::class],
+        ['OAUTH_CLIENT_INVALID', 401, AuthenticationException::class],
         ['API_KEY_ACCOUNT_LOCKED', 403, PermissionDeniedException::class],
         ['API_NOT_ENABLED', 403, PermissionDeniedException::class],
         ['MERCHANT_NOT_CONFIGURED', 403, PermissionDeniedException::class],
         ['TRANSFERS_BLOCKED', 403, PermissionDeniedException::class],
+        ['CONNECTED_ACCOUNT_LOCKED', 403, PermissionDeniedException::class],
+        ['CONNECTED_ACCOUNT_NOT_CONFIGURED', 403, PermissionDeniedException::class],
+        ['APP_DISABLED', 403, PermissionDeniedException::class],
         ['TRANSFER_NOT_FOUND', 404, NotFoundException::class],
         ['PAYMENT_NOT_FOUND', 404, NotFoundException::class],
+        ['USER_NOT_FOUND', 404, NotFoundException::class],
+        ['CHECKOUT_NOT_FOUND', 404, NotFoundException::class],
         ['NOT_FOUND', 404, NotFoundException::class],
         ['METHOD_NOT_ALLOWED', 405, InvalidRequestException::class],
         ['IDEMPOTENCY_KEY_REUSED', 409, IdempotencyException::class],
@@ -68,9 +79,9 @@ final class ErrorsTest extends TestCase
 
     private const PARAMETER_INVALID = 'amount tiene que ser un número con hasta 2 decimales.';
 
-    public function testCatalogHasThe32Codes(): void
+    public function testCatalogHasThe43Codes(): void
     {
-        self::assertCount(32, array_unique(array_column(self::CATALOG, 0)));
+        self::assertCount(43, array_unique(array_column(self::CATALOG, 0)));
     }
 
     /** @return iterable<string, array{string, int, class-string<RayaException>}> */

@@ -137,6 +137,143 @@ final class Fixtures
     public const WEBHOOK_OLD_SIGNATURE
         = '8e449e40286c1e331a636dd9e38ab4a548c3c9a09733fa05205d7a10623ecc45';
 
+    // --- Apps y cuentas conectadas (api.md › Checkout y Usuarios) ----------------------------
+
+    // La app de ejemplo (Tienda Ejemplo), la de utils/apiReferenceRequests.ts de raya-web. El
+    // client_secret es sintético, partido en dos como las claves.
+    public const CLIENT_ID = '7650337728110670';
+    public const CLIENT_SECRET
+        = 'raya_cs_live_' . 'TestSecret0123456789abcdefghijklmnopqrstuvwxyzAB';
+    public const CODE = 'c0d3ejemploQx9Km2Pr4Tv6Wy8Za1Bc3De5Fg7Hj0Kn';
+    public const REDIRECT_URI = 'https://tienda.example.com/raya/callback';
+    public const NOTIFICATION_URL = 'we_3fN8kQ2vX7mB1pR5tZ9cW4yD';
+
+    // La cuenta conectada de los ejemplos y su access_token (sintético: 48 caracteres base62).
+    public const USER_ID = '9d4f2b7e-3c61-4e0a-9b8f-2a5c7d1e6f40';
+    public const ACCESS_TOKEN
+        = 'raya_at_live_' . '4mQ8sT2vX7bN1kR5wZ9cH3jLpD6fG0aEyU8iO2pA5sD7fG9hJk';
+
+    public const OAUTH_TOKEN = [
+        'object' => 'oauth_token',
+        'access_token' => self::ACCESS_TOKEN,
+        'token_type' => 'Bearer',
+        'scope' => 'checkout profile',
+        'user_id' => self::USER_ID,
+        'expires_in' => null,
+        'refresh_token' => null,
+    ];
+
+    // Una cuenta personal verificada, con su negocio configurado.
+    public const USER = [
+        'id' => self::USER_ID,
+        'object' => 'user',
+        'type' => 'personal',
+        'email' => 'lucia@almacen.example.com',
+        'first_name' => 'Lucía',
+        'last_name' => 'Ejemplo',
+        'full_name' => 'Lucía Ejemplo',
+        'identification' => ['type' => 'DNI', 'number' => '34567890'],
+        'tax_id' => '27345678901',
+        'phone' => '+5493415550123',
+        'date_of_birth' => '1990-05-17',
+        'sex' => 'F',
+        'nationality' => 'Argentina',
+        'address' => [
+            'street' => 'Calle Ejemplo',
+            'number' => '1234',
+            'floor' => '2',
+            'apartment' => 'B',
+            'city' => 'Rosario',
+            'province' => 'Santa Fe',
+            'postal_code' => '2000',
+            'country' => 'Argentina',
+        ],
+        'identity_verified' => true,
+        'verified_at' => '2026-10-24T15:35:08Z',
+        'business' => null,
+        'merchant' => ['name' => 'Almacén Ejemplo', 'image' => null],
+        'created_at' => '2026-10-24T15:30:12Z',
+    ];
+
+    // La misma cuenta como empresa (el CUIT, con el verificador cambiado a propósito).
+    public const USER_BUSINESS = [
+        ...self::USER,
+        'type' => 'business',
+        'identification' => ['type' => 'CUIT', 'number' => '30345678907'],
+        'tax_id' => '30345678907',
+        'business' => [
+            'legal_name' => 'Almacén Ejemplo S.R.L.',
+            'tax_id' => '30345678907',
+            'company_type' => 'S.R.L.',
+            'representative' => [
+                'first_name' => 'Lucía',
+                'last_name' => 'Ejemplo',
+                'tax_id' => '27345678901',
+            ],
+        ],
+    ];
+
+    // El checkout de ejemplo: un ítem de 45000 con una comisión de 500 para la app; a la cuenta
+    // conectada le quedan 44500. Su id es el del pago.
+    public const CHECKOUT_ID = 'e7b3a9c2-4d1f-4a8e-b6c0-5f2d9e8a7b61';
+
+    public const CHECKOUT_PENDING = [
+        'id' => self::CHECKOUT_ID,
+        'object' => 'checkout',
+        'status' => 'pending',
+        'amount' => 45000,
+        'fee' => 500,
+        'net_amount' => 44500,
+        'amount_received' => null,
+        'currency' => 'ARS',
+        'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000]],
+        'description' => 'Pedido 1042',
+        'external_reference' => 'pedido-1042',
+        'account' => self::USER_ID,
+        'bank_transfer' => ['cvu' => '0000123390456538582824', 'alias' => 'raya.cash.ejemplo'],
+        'checkout_url' => 'https://raya.cash/checkout/' . self::CHECKOUT_ID,
+        'back_urls' => [
+            'success' => 'https://tienda.example.com/pedidos/1042',
+            'failure' => 'https://tienda.example.com/pedidos/1042/error',
+        ],
+        'auto_return' => 'approved',
+        'notification_url' => self::NOTIFICATION_URL,
+        'payer' => null,
+        'failure_code' => null,
+        'metadata' => ['pedido_id' => '1042'],
+        'expires_at' => '2026-10-25T16:00:00Z',
+        'paid_at' => null,
+        'refunded_at' => null,
+        'created_at' => '2026-10-24T16:00:00Z',
+    ];
+
+    public const CHECKOUT_SUCCEEDED = [
+        ...self::CHECKOUT_PENDING,
+        'status' => 'succeeded',
+        'amount_received' => 45000,
+        'payer' => [
+            'name' => 'María Ejemplo',
+            'tax_id' => '27123456781',
+            'account' => '0000123300602983525937',
+        ],
+        'paid_at' => '2026-10-24T16:07:41Z',
+    ];
+
+    public const CHECKOUT_REFUNDED = [
+        ...self::CHECKOUT_SUCCEEDED,
+        'status' => 'refunded',
+        'refunded_at' => '2026-10-24T17:20:00Z',
+    ];
+
+    public const EVENT_CHECKOUT_SUCCEEDED = [
+        'id' => 'evt_7kP2mW9xB4nQ1rT6vZ3cH8jL',
+        'object' => 'event',
+        'type' => 'checkout.succeeded',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-10-24T16:07:41Z',
+        'data' => ['object' => self::CHECKOUT_SUCCEEDED],
+    ];
+
     private function __construct() {}
 
     /**

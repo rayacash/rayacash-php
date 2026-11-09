@@ -18,35 +18,44 @@ final class Validation
     private const MAX_TIMEOUT = 2147483;
     private const APP_INFO_FIELDS = ['name', 'version', 'url'];
 
+    /** El error de una clave que no es un string (también el de una opción api_key). */
+    public const KEY_TYPE_MESSAGE = 'La clave secreta (o el access_token de una cuenta conectada) '
+        . 'tiene que ser un string, no ';
+
     /** @codeCoverageIgnore No se instancia: solo tiene métodos estáticos. */
     private function __construct() {}
 
-    /** La clave secreta: el formato lo valida la API; acá, lo que nunca puede andar. */
+    /**
+     * La clave: tu clave secreta (raya_sk_live_…) o el access_token de una cuenta conectada
+     * (raya_at_live_…), que viajan igual, en Authorization: Bearer. El formato lo valida la API;
+     * acá, lo que nunca puede andar.
+     */
     public static function apiKey(#[\SensitiveParameter] mixed $key): string
     {
         if (!is_string($key)) {
-            throw new \TypeError(
-                'La clave secreta tiene que ser un string, no ' . get_debug_type($key) . '.',
-            );
+            throw new \TypeError(self::KEY_TYPE_MESSAGE . get_debug_type($key) . '.');
         }
         if (Text::isBlank($key)) {
             throw new AuthenticationException(
-                "Falta la clave secreta: pasala a new RayaClient('raya_sk_live_…'), configurala "
-                . 'con RayaCash::setApiKey() o definí la variable de entorno RAYA_SECRET_KEY.',
+                'Falta la clave: pasá tu clave secreta (raya_sk_live_…) o el access_token de una '
+                . 'cuenta conectada (raya_at_live_…) a new RayaClient(…), configurala con '
+                . 'RayaCash::setApiKey() o definí la variable de entorno RAYA_SECRET_KEY.',
                 errorCode: 'API_KEY_MISSING',
             );
         }
         if (\str_starts_with($key, 'raya_pk_')) {
             throw new AuthenticationException(
                 'Usaste la clave pública (raya_pk_…). La API se usa con la clave secreta '
-                . '(raya_sk_live_…), solo desde tu servidor.',
+                . '(raya_sk_live_…) o con el access_token de una cuenta conectada '
+                . '(raya_at_live_…), solo desde tu servidor.',
                 errorCode: 'API_KEY_PUBLISHABLE_NOT_ALLOWED',
             );
         }
         if (\preg_match('/\A[\x21-\x7e]+\z/', $key) !== 1) {
             throw new AuthenticationException(
-                'La clave secreta tiene espacios o caracteres inválidos: copiala de nuevo desde '
-                . 'Developers › API Keys.',
+                'La clave secreta o el access_token tiene espacios o caracteres inválidos: copialo '
+                . 'de nuevo (la clave, desde Developers › API Keys; el access_token, de la '
+                . 'respuesta de oauth->token).',
                 errorCode: 'API_KEY_INVALID',
             );
         }

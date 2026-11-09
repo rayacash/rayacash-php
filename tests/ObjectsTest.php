@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace RayaCash\Tests;
 
 use RayaCash\Balance;
+use RayaCash\Checkout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiException;
 use RayaCash\Internal\Hydrator;
 use RayaCash\Internal\ObjectToken;
 use RayaCash\ListObject;
+use RayaCash\OAuthToken;
 use RayaCash\Payment;
 use RayaCash\RayaCash;
 use RayaCash\RayaObject;
@@ -17,6 +19,7 @@ use RayaCash\Tests\Support\Fixtures;
 use RayaCash\Tests\Support\MockApi;
 use RayaCash\Tests\Support\TestCase;
 use RayaCash\Transfer;
+use RayaCash\User;
 
 /**
  * Los objetos de la API: su clase, sus valores crudos, los campos que faltan, que se pueden
@@ -64,6 +67,119 @@ final class ObjectsTest extends TestCase
         self::assertNotNull($succeeded->payer);
         self::assertSame(Payment\Payer::class, $succeeded->payer::class);
         self::assertSame('María Ejemplo', $succeeded->payer->name);
+    }
+
+    public function testCheckoutNestedObjectsAndPlainMetadata(): void
+    {
+        $pending = self::convertAs(Checkout::class, Fixtures::CHECKOUT_PENDING);
+        self::assertSame(Checkout\BankTransfer::class, $pending->bank_transfer::class);
+        self::assertSame('0000123390456538582824', $pending->bank_transfer->cvu);
+        self::assertSame(Checkout\BackUrls::class, $pending->back_urls::class);
+        self::assertSame(
+            'https://tienda.example.com/pedidos/1042/error',
+            $pending->back_urls->failure,
+        );
+        // Los ítems: una lista de Item.
+        self::assertCount(1, $pending->items);
+        self::assertSame(Checkout\Item::class, $pending->items[0]::class);
+        self::assertSame(
+            ['Pedido 1042', 1, 45000],
+            [
+                $pending->items[0]->title,
+                $pending->items[0]->quantity,
+                $pending->items[0]->unit_price,
+            ],
+        );
+        self::assertNull($pending->payer);
+        self::assertSame(['pedido_id' => '1042'], $pending->metadata); // un array común
+        self::assertSame(Fixtures::CHECKOUT_PENDING, self::jsonRoundTrip($pending));
+        self::assertSame(Fixtures::CHECKOUT_PENDING, $pending->toArray());
+        $succeeded = self::convertAs(Checkout::class, Fixtures::CHECKOUT_SUCCEEDED);
+        self::assertSame(Checkout\Payer::class, get_debug_type($succeeded->payer));
+        self::assertSame('María Ejemplo', $succeeded->payer?->name);
+        $empty = Checkout::constructFrom(['object' => 'checkout', 'items' => []]);
+        self::assertSame([], $empty->items);
+    }
+
+    public function testUserNestedObjects(): void
+    {
+        $user = self::convertAs(User::class, Fixtures::USER);
+        self::assertSame(User\Identification::class, get_debug_type($user->identification));
+        self::assertSame(
+            ['DNI', '34567890'],
+            [$user->identification?->type, $user->identification?->number],
+        );
+        self::assertSame(User\Address::class, get_debug_type($user->address));
+        self::assertSame('Rosario', $user->address?->city);
+        self::assertNull($user->business);
+        self::assertSame(User\Merchant::class, get_debug_type($user->merchant));
+        self::assertSame(
+            ['Almacén Ejemplo', null],
+            [$user->merchant?->name, $user->merchant?->image],
+        );
+        self::assertTrue($user->identity_verified);
+        self::assertSame(Fixtures::USER, $user->toArray());
+
+        $business = self::convertAs(User::class, Fixtures::USER_BUSINESS);
+        self::assertSame(User::TYPE_BUSINESS, $business->type);
+        self::assertSame(User::IDENTIFICATION_CUIT, $business->identification?->type);
+        self::assertSame(User\Business::class, get_debug_type($business->business));
+        self::assertSame(
+            User\Representative::class,
+            get_debug_type($business->business?->representative),
+        );
+        self::assertSame('27345678901', $business->business?->representative?->tax_id);
+        self::assertSame(Fixtures::USER_BUSINESS, $business->toArray());
+    }
+
+    /**
+     * El access_token es un secreto, como la clave: (string), print_r y var_dump lo muestran
+     * enmascarado. Para guardarlo están ->access_token, toArray() y json_encode(), enteros.
+     */
+    public function testOAuthTokenShowsTheAccessTokenMasked(): void
+    {
+        $token = self::convertAs(OAuthToken::class, Fixtures::OAUTH_TOKEN);
+        self::assertSame(Fixtures::ACCESS_TOKEN, $token->access_token);
+        self::assertSame(Fixtures::OAUTH_TOKEN, $token->toArray());
+        self::assertSame(
+            json_encode(Fixtures::OAUTH_TOKEN, JSON_THROW_ON_ERROR),
+            json_encode($token, JSON_THROW_ON_ERROR),
+        );
+        $masked = 'raya_at_live_…9hJk';
+        self::assertSame(
+            self::sortedKeys([...Fixtures::OAUTH_TOKEN, 'access_token' => $masked]),
+            json_decode((string) $token, true, 512, JSON_THROW_ON_ERROR),
+        );
+        $printed = print_r($token, true);
+        self::assertStringStartsWith("RayaCash\\OAuthToken Object\n(\n", $printed);
+        self::assertStringContainsString("[access_token] => {$masked}", $printed);
+        ob_start();
+        var_dump($token);
+        $dumped = (string) ob_get_clean();
+        self::assertStringContainsString($masked, $dumped);
+        $secret = substr(Fixtures::ACCESS_TOKEN, strlen('raya_at_live_'));
+        foreach ([(string) $token, $printed, $dumped] as $shown) {
+            self::assertStringNotContainsString($secret, $shown);
+        }
+        // Enmascarar no cambia el objeto.
+        self::assertSame(Fixtures::ACCESS_TOKEN, $token->access_token);
+        self::assertSame(Fixtures::OAUTH_TOKEN, $token->toArray());
+        // Sin access_token (uno armado a mano, o vacío), nada que enmascarar.
+        self::assertSame('{}', (string) OAuthToken::constructFrom([]));
+        $empty = OAuthToken::constructFrom(['access_token' => '']);
+        self::assertSame(['access_token' => ''], $empty->__debugInfo());
+        self::assertSame("{\n  \"access_token\": \"\"\n}", (string) $empty);
+    }
+
+    public function testEventHydratesACheckout(): void
+    {
+        $event = Event::constructFrom(Fixtures::EVENT_CHECKOUT_SUCCEEDED);
+        self::assertSame(Event::TYPE_CHECKOUT_SUCCEEDED, $event->type);
+        $object = $event->data->object;
+        self::assertSame(Checkout::class, get_debug_type($object));
+        self::assertInstanceOf(Checkout::class, $object);
+        self::assertSame(['succeeded', 500], [$object->status, $object->fee]);
+        self::assertSame(Checkout\Item::class, get_debug_type($object->items[0]));
     }
 
     public function testMetadataKeysCanShadowDictMethods(): void
@@ -775,6 +891,23 @@ final class ObjectsTest extends TestCase
                 Fixtures::TRANSFER_INBOUND,
                 static fn() => $client->payments->retrieve('p'),
             ],
+            'un access_token' => [
+                Fixtures::USER,
+                static fn() => $client->oauth->token([
+                    'client_id' => Fixtures::CLIENT_ID,
+                    'client_secret' => Fixtures::CLIENT_SECRET,
+                    'code' => Fixtures::CODE,
+                    'redirect_uri' => Fixtures::REDIRECT_URI,
+                ]),
+            ],
+            'un usuario' => [
+                Fixtures::CHECKOUT_PENDING,
+                static fn() => $client->users->retrieve('me'),
+            ],
+            'un checkout' => [
+                Fixtures::OAUTH_TOKEN,
+                static fn() => $client->checkout->orders->retrieve('c'),
+            ],
         ];
         foreach ($calls as $noun => [$body, $call]) {
             $this->api->add(200, $body);
@@ -793,7 +926,7 @@ final class ObjectsTest extends TestCase
             );
             self::assertSame($body, json_decode((string) $error->getHttpBody(), true));
         }
-        self::assertCount(5, $this->api->requests); // no se reintenta
+        self::assertCount(8, $this->api->requests); // no se reintenta
     }
 
     /**

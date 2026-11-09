@@ -483,6 +483,42 @@ final class RequestsTest extends TestCase
             Fixtures::EVENT_PAYMENT_SUCCEEDED,
             'un pago',
         ];
+        yield 'oauth->token' => [
+            static fn(RayaClient $client): mixed => $client->oauth->token([
+                'client_id' => Fixtures::CLIENT_ID,
+                'client_secret' => Fixtures::CLIENT_SECRET,
+                'code' => Fixtures::CODE,
+                'redirect_uri' => Fixtures::REDIRECT_URI,
+            ]),
+            Fixtures::USER,
+            'un access_token',
+        ];
+        yield 'users->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->users->retrieve('me'),
+            Fixtures::OAUTH_TOKEN,
+            'un usuario',
+        ];
+        yield 'checkout->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->checkout->orders->create([
+                'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000]],
+            ]),
+            Fixtures::PAYMENT_PENDING,
+            'un checkout',
+        ];
+        yield 'checkout->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
+                Fixtures::CHECKOUT_ID,
+            ),
+            Fixtures::USER,
+            'un checkout',
+        ];
+        yield 'checkout->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
+                Fixtures::CHECKOUT_ID,
+            ),
+            Fixtures::EVENT_CHECKOUT_SUCCEEDED,
+            'un checkout',
+        ];
     }
 
     /**
@@ -511,7 +547,8 @@ final class RequestsTest extends TestCase
         self::assertSame($json, json_decode((string) $error->getHttpBody(), true));
         $request = $this->api->last();
         self::assertSame($request->header('idempotency-key'), $error->getIdempotencyKey());
-        if ($request->method === 'POST') {
+        // Un POST lleva la clave, salvo oauth->token, que no manda Idempotency-Key.
+        if ($request->method === 'POST' && $request->path !== '/v1/oauth/token') {
             self::assertNotNull($error->getIdempotencyKey());
         } else {
             self::assertNull($error->getIdempotencyKey());

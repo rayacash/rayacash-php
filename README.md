@@ -1,6 +1,6 @@
 # rayacash-php
 
-El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos.
+El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos. Y si tu aplicación cobra a nombre de otras cuentas de Raya (un marketplace, una plataforma), conectarlas y crear checkouts a su nombre con tu comisión.
 
 ```php
 use RayaCash\RayaClient;
@@ -11,7 +11,7 @@ $payment = $client->payments->create(['amount' => 15000, 'description' => 'Pedid
 echo $payment->bank_transfer->cvu, ' ', $payment->checkout_url, "\n";
 ```
 
-Versión 1.0.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
+Versión 1.1.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
 
 ## Contenido
 
@@ -26,6 +26,7 @@ Versión 1.0.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 - [Paginación](#paginación)
 - [Errores](#errores)
 - [Webhooks](#webhooks)
+- [Apps y cuentas conectadas](#apps-y-cuentas-conectadas)
 - [Tests de tu integración](#tests-de-tu-integración)
 - [Configuración avanzada](#configuración-avanzada)
 - [Seguridad](#seguridad)
@@ -38,6 +39,7 @@ Versión 1.0.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 2. **Tu clave secreta** (`raya_sk_live_…`), de [Developers › API Keys](https://raya.cash/dashboard/developers/api-keys). La vas a ver completa una sola vez: guardala en una variable de entorno de tu servidor.
 3. **Para cobrar:** tu negocio configurado en [Configuración › Negocio](https://raya.cash/dashboard/settings/business). Sin eso, crear un pago da `MERCHANT_NOT_CONFIGURED`.
 4. **Para los webhooks:** un destino en [Developers › Webhooks](https://raya.cash/dashboard/developers/webhooks) y su secreto (`whsec_…`).
+5. **Para cobrar a nombre de otras cuentas:** una aplicación en [Developers › Integraciones › Apps](https://raya.cash/dashboard/developers/apps), con su `client_id`, su `client_secret` (`raya_cs_live_…`, que ves una sola vez) y tus URLs de redirección. Ver [Apps y cuentas conectadas](#apps-y-cuentas-conectadas).
 
 ## Instalación
 
@@ -106,7 +108,7 @@ foreach ($page->autoPagingIter() as $deposit) {
 
 Cada método recibe los parámetros en un array, con los nombres de la API (`external_reference`, `created_gte`), y las opciones de la llamada, como la `idempotency_key`, en otro array: el último argumento. Un parámetro o una opción que no existe falla antes de mandar nada (con «¿quisiste decir…?» si escribiste `externalReference`).
 
-Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event` o `ListObject`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
+Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject` y, en las apps, `OAuthToken`, `User` y `Checkout`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
 
 Cada objeto trae `getLastResponse()`, con el `requestId` (`req_…`) que nos tenés que mandar si escribís a soporte:
 
@@ -136,6 +138,8 @@ $transfer = Transfer::create(
 );
 $page = Transfer::list(['direction' => 'inbound']);
 ```
+
+También están `OAuth::token()`, `User::retrieve()`, `Checkout::create()`, `Checkout::retrieve()` y `Checkout::refundById()` (ver [Apps y cuentas conectadas](#apps-y-cuentas-conectadas)): con la clave global puesta en el `access_token` de la cuenta conectada. Como la configuración global dura todo el proceso, para operar con varias cuentas conectadas usá un `RayaClient` por cuenta.
 
 Los dos estilos usan el mismo núcleo y se comportan igual. La configuración global se lee en cada request, así que cambiarla entre llamadas surte efecto enseguida. Cada valor se valida al asignarlo, salvo la clave, que se valida en cada request: así un `.env` vacío no rompe el arranque de tu framework. Preferí `RayaClient` si tu proceso usa más de una clave o si querés configurar cada cliente por separado. `$payment->refund()` usa el cliente del que vino el pago: si lo trajiste con un `RayaClient`, usa ese cliente; si no, la configuración global. PHP no deja tener un `refund()` estático y otro de instancia, por eso el reembolso por id del estilo global es `Payment::refundById()`.
 
@@ -350,10 +354,10 @@ Todas las excepciones del SDK extienden `RayaCash\Exception\RayaException` (que 
 
 | Clase | HTTP | Códigos | Qué hacer |
 |---|---|---|---|
-| `InvalidRequestException` | 400, 405, 413 y los demás `4xx` | `PARAMETER_MISSING`, `PARAMETER_INVALID`, `PARAMETER_UNKNOWN`, `INVALID_JSON`… | Corregí la request: `$e->getParam()` dice qué parámetro falló. |
-| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta. |
-| `AuthenticationException` | 401 | `API_KEY_MISSING`, `API_KEY_INVALID`, `API_KEY_EXPIRED`… | Revisá la clave secreta. |
-| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED` | La cuenta no puede hacer esto todavía. |
+| `InvalidRequestException` | 400, 405, 413 y los demás `4xx` | `PARAMETER_MISSING`, `PARAMETER_INVALID`, `PARAMETER_UNKNOWN`, `INVALID_JSON`, `OAUTH_GRANT_INVALID`, `OAUTH_GRANT_TYPE_UNSUPPORTED`… | Corregí la request: `$e->getParam()` dice qué parámetro falló. Con `OAUTH_GRANT_INVALID`, el code ya se usó o venció: la cuenta tiene que volver a autorizar. |
+| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `USER_NOT_FOUND`, `CHECKOUT_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta (o de la cuenta conectada). |
+| `AuthenticationException` | 401 | `API_KEY_MISSING`, `API_KEY_INVALID`, `API_KEY_EXPIRED`, `ACCESS_TOKEN_MISSING`, `ACCESS_TOKEN_INVALID`, `ACCESS_TOKEN_REVOKED`, `OAUTH_CLIENT_INVALID`… | Revisá la clave secreta (o el access_token: con `ACCESS_TOKEN_REVOKED`, la cuenta desconectó tu app). |
+| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED`, `CONNECTED_ACCOUNT_LOCKED`, `CONNECTED_ACCOUNT_NOT_CONFIGURED`, `APP_DISABLED` | La cuenta (o la cuenta conectada, o tu app) no puede hacer esto todavía. |
 | `IdempotencyException` (subclase de la siguiente: atrapala antes) | 409 | `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_USE` | Una clave por operación; si está en uso, reintentá más tarde con la misma. |
 | `ConflictException` | 409 | `PAYMENT_NOT_REFUNDABLE` | Mirá `$e->getData()['status']` y `$e->getData()['reason'] ?? null`. |
 | `UnprocessableEntityException` | 422 | `INSUFFICIENT_BALANCE`, `LIMIT_EXCEEDED`, `DESTINATION_NOT_FOUND`, `DESTINATION_INACTIVE`, `DESTINATION_NOT_SUPPORTED`, `REFUND_FAILED` | No se arregla reintentando: mostráselo a la persona. |
@@ -429,10 +433,83 @@ http_response_code(200);
 - **En Laravel, la ruta va sin CSRF** (la llama Raya, no un navegador: la firma reemplaza al token). En Laravel 11 o más nuevo, con `$middleware->validateCsrfTokens(except: ['webhooks/raya'])` en `bootstrap/app.php`; en Laravel 10, en el `$except` de `VerifyCsrfToken`.
 - Respondé `2xx` en menos de 15 segundos. Si tenés que hacer algo lento, guardá el evento, respondé y procesalo después.
 - El mismo evento puede llegar más de una vez y desordenado: guardá los `$event->id` que procesaste y, si necesitás el estado actual, consultá el objeto con la API.
-- `$event->data->object` es el `Transfer` o el `Payment` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
+- `$event->data->object` es el `Transfer`, el `Payment` o el `Checkout` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
+- Si tu aplicación cobra a nombre de otras cuentas, recibís `checkout.created`, `checkout.succeeded`, `checkout.failed` y `checkout.refunded` (`Event::TYPE_CHECKOUT_*`), con el `Checkout`; la cuenta conectada recibe sus `payment.*`. Ver [Apps y cuentas conectadas](#apps-y-cuentas-conectadas).
 - «Enviar evento de prueba» (en Developers › Webhooks) manda un `webhook.test`: respondé `2xx` e ignoralo.
 - La firma tolera 5 minutos de diferencia con tu reloj (`$tolerance = 300`, en segundos; `null` o `0` la desactivan). Mientras rotás el secreto llegan dos firmas: alcanza con que coincida una.
 - Con `$client->constructEvent(…)` el evento queda ligado a ese cliente: `$event->data->object->refund()` usa su clave.
+
+## Apps y cuentas conectadas
+
+Una **aplicación** de Raya (de [Developers › Integraciones › Apps](https://raya.cash/dashboard/developers/apps)) cobra a nombre de otras cuentas de Raya que la conectan, con una comisión fija por cobro que se liquida a tu cuenta. Es el equivalente de las aplicaciones y el OAuth de Mercado Pago, con `fee` en lugar de `marketplace_fee`. El flujo:
+
+1. **El link de autorización**, estático, en tu web: `https://raya.cash/authorization?client_id=<client_id>&response_type=code&redirect_uri=<tu callback>&state=<lo que quieras recibir de vuelta>`. La `redirect_uri` tiene que estar registrada en tu app, idéntica.
+2. **La cuenta autoriza** (ve el nombre y la imagen de tu app y los permisos: cobrar a su nombre y ver sus datos) y Raya la manda a tu `redirect_uri` con `?code=…&state=…`. El `code` dura 10 minutos y se canjea una sola vez.
+3. **El canje:** `$client->oauth->token(…)` devuelve el `access_token` de la cuenta (`raya_at_live_…`) y su `user_id`. Guardalos juntos, el token cifrado, como guardás tu clave secreta: no vence.
+4. **Por la cuenta conectada:** un `RayaClient` con su `access_token` como clave lee sus datos (`users`) y crea checkouts a su nombre (`checkout->orders`). Al acreditarse, lo recibido menos `fee` se liquida al comercio conectado y `fee` a tu cuenta (los dos a los días de liquidación de cada uno, adelantables); un reembolso revierte las dos partes.
+
+```php
+use RayaCash\RayaClient;
+
+$client = new RayaClient(); // para este paso no hace falta ninguna clave
+
+// En tu callback (la redirect_uri) llegan ?code=…&state=… (state es lo que pusiste en el link).
+$token = $client->oauth->token([
+    'client_id' => '7650337728110670',
+    'client_secret' => getenv('RAYA_CLIENT_SECRET') ?: '', // raya_cs_live_…, solo en tu servidor
+    'code' => $_GET['code'],
+    'redirect_uri' => 'https://tienda.example.com/raya/callback', // idéntica a la del link
+]);
+// grant_type lo pone el SDK. Guardá access_token (cifrado) y user_id juntos: el token no vence.
+$account->saveRayaConnection($token->access_token, $token->user_id);
+```
+
+```php
+use RayaCash\Checkout;
+use RayaCash\RayaClient;
+
+// Un cliente por cuenta conectada, con su access_token como clave.
+$connected = new RayaClient($account->raya_access_token);
+
+// Los datos de la cuenta: solo con su propio token (cualquier otro id da USER_NOT_FOUND). Nunca
+// viene la foto del documento ni el número de trámite.
+$user = $connected->users->retrieve($account->raya_user_id); // o 'me'
+echo $user->full_name, ' ', $user->identification?->number, "\n";
+
+// Un cobro a su nombre, con tu comisión fija (fee, en pesos: un monto, no un porcentaje).
+$checkout = $connected->checkout->orders->create(
+    [
+        'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000]],
+        'fee' => 500,
+        'external_reference' => 'pedido-1042',
+        'back_urls' => [
+            'success' => 'https://tienda.example.com/pedidos/1042',
+            'failure' => 'https://tienda.example.com/pedidos/1042/error',
+        ],
+        'auto_return' => 'approved', // al acreditarse, quien paga vuelve solo a success
+        'notification_url' => 'we_3fN8kQ2vX7mB1pR5tZ9cW4yD', // tu destino de Developers › Webhooks
+        'metadata' => ['pedido_id' => '1042'],
+    ],
+    ['idempotency_key' => $order->checkout_idempotency_key], // un UUID v4 guardado con el pedido
+);
+// Mandá a quien paga a la página del checkout, con el nombre y la imagen del comercio conectado:
+echo $checkout->checkout_url, "\n";
+echo $checkout->net_amount, "\n"; // lo que se liquida a la cuenta conectada: 44500
+
+// Después: consultarlo, o reembolsarlo (total: la cuenta devuelve lo recibido y tu comisión se
+// revierte). Entregá solo cuando status es succeeded.
+$checkout = $connected->checkout->orders->retrieve($checkout->id);
+if ($checkout->status === Checkout::STATUS_SUCCEEDED) {
+    $checkout = $checkout->refund(['idempotency_key' => $refund->idempotency_key]);
+}
+```
+
+- **`oauth->token` es la única request sin `Authorization`:** la app se identifica con `client_id` y `client_secret`, así que anda con un cliente sin clave, y sus opciones no aceptan `api_key` ni `idempotency_key` (no lleva `Idempotency-Key`: el code se canjea una vez). `OAUTH_CLIENT_INVALID` es un `client_id` o un `client_secret` equivocado (o la cuenta dueña de la app no puede operar: bloqueada, inactiva o sin la identidad verificada); `OAUTH_GRANT_INVALID`, un code usado, vencido o una `redirect_uri` distinta.
+- **El `access_token` es una clave más:** va en `Authorization: Bearer`, se valida igual y el SDK lo enmascara igual (`raya_at_live_…9hJk`), también en `(string) $token`, `var_dump` y `print_r` del `OAuthToken` (`$token->access_token`, `toArray()` y `json_encode()` lo dan entero, para guardarlo). `expires_in` y `refresh_token` vienen en `null`: no vence y no hay refresh. Deja de valer cuando la cuenta desconecta tu app desde Configuración › Apps externas (`ACCESS_TOKEN_REVOKED`: pedile que vuelva a conectarla) o cuando la vuelve a autorizar (recibís uno nuevo).
+- **`create` recibe** `items` (de 1 a 20, cada uno con `title`, `quantity` y `unit_price`; el total es lo que transfiere quien paga), `fee` (de 0 a menos que el total; por defecto 0), `description`, `external_reference`, `metadata`, `back_urls` (`success` y `failure`), `auto_return` (`'approved'`), `notification_url` (el id `we_…` o la URL de un destino tuyo de Developers › Webhooks; sin él, los destinos suscriptos a `checkout.*`) y `expires_in` (de 300 a 864000 segundos; por defecto, el plazo del comercio conectado). `fee` y `unit_price` aceptan lo mismo que `amount` ([Montos](#montos)). Si la cuenta todavía no configuró su negocio, `CONNECTED_ACCOUNT_NOT_CONFIGURED` (`$user->merchant` viene en `null`).
+- **El `Checkout`** trae `status` (`pending`, `succeeded`, `failed`, `expired` o `refunded`), `amount`, `fee`, `net_amount`, `amount_received`, `items`, `account` (el `user_id` de la cuenta conectada), `bank_transfer` (el CVU y el alias exclusivos, del comercio conectado), `checkout_url`, `back_urls`, `auto_return`, `notification_url`, `payer`, `failure_code`, `metadata`, `expires_at`, `paid_at`, `refunded_at` y `created_at`. Su `id` es el del pago: la cuenta conectada lo ve con su propia clave en `payments->retrieve()`.
+- **Los webhooks** `checkout.created`, `checkout.succeeded`, `checkout.failed` y `checkout.refunded` te llegan a vos (al destino de `notification_url`, o a los suscriptos), con el `Checkout` en `$event->data->object`; la cuenta conectada recibe sus `payment.*`. Los límites de requests se cuentan sobre tu cuenta, y estas requests no aparecen en Developers › Logs.
+- **Estilo global:** `OAuth::token([…])`, y con `RayaCash::setApiKey($accessToken)`, `User::retrieve($userId)`, `Checkout::create([…])`, `Checkout::retrieve($id)`, `Checkout::refundById($id)` y `$checkout->refund()`. Hay un ejemplo completo en [`examples/cobrar-a-nombre-de-una-cuenta.php`](examples/cobrar-a-nombre-de-una-cuenta.php).
 
 ## Tests de tu integración
 
@@ -486,7 +563,7 @@ $client = new RayaClient([
 ```
 
 - **Proxies y certificados:** pasá un `CurlClient` con opciones de curl (`CURLOPT_PROXY`, `CURLOPT_CAINFO`…). Las que maneja el SDK (URL, método, headers, body, timeouts y redirects) no se aceptan, y apagar la verificación TLS o `CURLOPT_VERBOSE` (escribe el header `Authorization`, con la clave entera) tampoco: para ver las requests, usá `RAYA_LOG=debug`, y para un problema de conexión, `curl -v https://api.raya.cash` en la terminal. Tus opciones pueden llevar la contraseña del proxy: no aparecen en `var_dump()` ni (desde PHP 8.2) en las trazas, y un `CurlClient` no se serializa. libcurl también respeta `https_proxy`. En Windows, si ves `curl 60` o `curl 77`, falta el certificado de CA: configurá `curl.cainfo` en tu `php.ini` o pasá `CURLOPT_CAINFO`. Para usar otra librería HTTP, implementá `HttpClientInterface`.
-- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.0.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
+- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.1.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
 - **Logging:** con `RAYA_LOG=info` (o `RayaCash::setLog('info')`) ves cada request, su status, su `request_id` y los reintentos en STDERR (en la consola) o en el `error_log()` de PHP (en FPM o Apache); con `debug`, también la query y la idempotency key. Con `RayaCash::setLogger($logger)`, un logger PSR-3 (Monolog, el de Laravel, el de Symfony) recibe cada línea, aunque no haya `RAYA_LOG`. Nunca logueamos la clave ni los bodies.
 - **Cerrar:** `$client->close()` suelta la conexión, para workers largos (Octane, un consumidor de colas). Se puede llamar más de una vez y el cliente sigue usable: la próxima request abre otra. El `http_client` que pasaste no se toca.
 - **Endpoints nuevos:** si la API suma un endpoint antes que el SDK, usá `$client->rawRequest('get', '/v1/…', params: […])` o `$client->rawRequest('post', '/v1/…', body: […])`: tiene la misma autenticación, reintentos y errores.
@@ -498,6 +575,7 @@ $client = new RayaClient([
 - El SDK rechaza la clave pública (`raya_pk_…`) sin mandar nada, nunca la muestra completa (`var_dump($client)` y `print_r($client)` la enmascaran, y no aparece en `var_export()` ni en `json_encode()`) y nunca sigue redirects. Un `RayaClient` no se deja serializar.
 - Cada parámetro del SDK que puede llevar la clave está marcado con `#[\SensitiveParameter]`: desde PHP 8.2, no aparece en las trazas de los errores. En PHP 8.1, dejá `zend.exception_ignore_args = On` (el valor de `php.ini-production`), así las trazas no muestran argumentos.
 - Si la clave se filtró, rotala en Developers › API Keys con vencimiento «Ahora»: la anterior deja de funcionar al instante.
+- **En una app:** el `client_secret` y los `access_token` de las cuentas conectadas son secretos como la clave: guardalos cifrados, solo en tu servidor. Si el `client_secret` se filtró, regeneralo en Developers › Apps (el anterior deja de valer); si se filtró un `access_token`, la cuenta puede desconectar tu app desde Configuración › Apps externas o volver a autorizarla (el token anterior muere). El SDK enmascara los `access_token` como a la clave, pero el `client_secret` viaja en el body de `oauth->token`: con las trazas con argumentos (`zend.exception_ignore_args = Off`, el valor de desarrollo), la traza de un error de la API en esa llamada incluye la request con su body; con el valor de producción (`On`), no.
 - Las requests que hacés con la clave secreta quedan 30 días en [Developers › Logs](https://raya.cash/dashboard/developers/logs).
 
 ## Versionado y compatibilidad
