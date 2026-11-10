@@ -137,7 +137,7 @@ final class Fixtures
     public const WEBHOOK_OLD_SIGNATURE
         = '8e449e40286c1e331a636dd9e38ab4a548c3c9a09733fa05205d7a10623ecc45';
 
-    // --- Apps y cuentas conectadas (api.md › Checkout y Usuarios) ----------------------------
+    // --- Raya Connect (api.md › Connect y Usuarios) ------------------------------------------
 
     // La app de ejemplo (Tienda Ejemplo), la de utils/apiReferenceRequests.ts de raya-web. El
     // client_secret es sintético, partido en dos como las claves.
@@ -153,11 +153,16 @@ final class Fixtures
     public const ACCESS_TOKEN
         = 'raya_at_live_' . '4mQ8sT2vX7bN1kR5wZ9cH3jLpD6fG0aEyU8iO2pA5sD7fG9hJk';
 
+    // El access_token de la cuenta de prueba de la app (Developers › Apps › tu app › Test): el
+    // prefijo de prueba, el client_id y 32 caracteres base62. Sintético, como los demás.
+    public const TEST_MODE_ACCESS_TOKEN
+        = 'raya_at_test_' . self::CLIENT_ID . 'pR5tZ9cW4yD3fN8kQ2vX7mB1hJ6gL0sA';
+
     public const OAUTH_TOKEN = [
         'object' => 'oauth_token',
         'access_token' => self::ACCESS_TOKEN,
         'token_type' => 'Bearer',
-        'scope' => 'checkout profile',
+        'scope' => 'orders profile',
         'user_id' => self::USER_ID,
         'expires_in' => null,
         'refresh_token' => null,
@@ -213,13 +218,14 @@ final class Fixtures
         ],
     ];
 
-    // El checkout de ejemplo: un ítem de 45000 con una comisión de 500 para la app; a la cuenta
-    // conectada le quedan 44500. Su id es el del pago.
-    public const CHECKOUT_ID = 'e7b3a9c2-4d1f-4a8e-b6c0-5f2d9e8a7b61';
+    // El pago de Connect de ejemplo: un ítem de 45000 con una comisión de 500 para la app; a la
+    // cuenta conectada le quedan 44500. Su id es el de su pago (Payment). checkout_url sigue siendo
+    // la página de pago, raya.cash/checkout/<id>.
+    public const CONNECT_ORDER_ID = 'e7b3a9c2-4d1f-4a8e-b6c0-5f2d9e8a7b61';
 
-    public const CHECKOUT_PENDING = [
-        'id' => self::CHECKOUT_ID,
-        'object' => 'checkout',
+    public const CONNECT_ORDER_PENDING = [
+        'id' => self::CONNECT_ORDER_ID,
+        'object' => 'connect.order',
         'status' => 'pending',
         'amount' => 45000,
         'fee' => 500,
@@ -231,7 +237,7 @@ final class Fixtures
         'external_reference' => 'pedido-1042',
         'account' => self::USER_ID,
         'bank_transfer' => ['cvu' => '0000123390456538582824', 'alias' => 'raya.cash.ejemplo'],
-        'checkout_url' => 'https://raya.cash/checkout/' . self::CHECKOUT_ID,
+        'checkout_url' => 'https://raya.cash/checkout/' . self::CONNECT_ORDER_ID,
         'back_urls' => [
             'success' => 'https://tienda.example.com/pedidos/1042',
             'failure' => 'https://tienda.example.com/pedidos/1042/error',
@@ -247,8 +253,8 @@ final class Fixtures
         'created_at' => '2026-10-24T16:00:00Z',
     ];
 
-    public const CHECKOUT_SUCCEEDED = [
-        ...self::CHECKOUT_PENDING,
+    public const CONNECT_ORDER_SUCCEEDED = [
+        ...self::CONNECT_ORDER_PENDING,
         'status' => 'succeeded',
         'amount_received' => 45000,
         'payer' => [
@@ -259,19 +265,19 @@ final class Fixtures
         'paid_at' => '2026-10-24T16:07:41Z',
     ];
 
-    public const CHECKOUT_REFUNDED = [
-        ...self::CHECKOUT_SUCCEEDED,
+    public const CONNECT_ORDER_REFUNDED = [
+        ...self::CONNECT_ORDER_SUCCEEDED,
         'status' => 'refunded',
         'refunded_at' => '2026-10-24T17:20:00Z',
     ];
 
-    public const EVENT_CHECKOUT_SUCCEEDED = [
+    public const EVENT_CONNECT_ORDER_SUCCEEDED = [
         'id' => 'evt_7kP2mW9xB4nQ1rT6vZ3cH8jL',
         'object' => 'event',
-        'type' => 'checkout.succeeded',
+        'type' => 'connect.order.succeeded',
         'api_version' => '2026-10-23',
         'created_at' => '2026-10-24T16:07:41Z',
-        'data' => ['object' => self::CHECKOUT_SUCCEEDED],
+        'data' => ['object' => self::CONNECT_ORDER_SUCCEEDED],
     ];
 
     private function __construct() {}

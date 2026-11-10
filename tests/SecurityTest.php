@@ -6,7 +6,7 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
@@ -146,15 +146,17 @@ final class SecurityTest extends TestCase
         $connected = new RayaClient(Fixtures::ACCESS_TOKEN, ['http_client' => $this->api]);
         $this->api->add(200, Fixtures::USER);
         $user = $connected->users->retrieve('me');
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $checkout = $connected->checkout->orders->create(['items' => [self::ITEM], 'fee' => 500]);
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connectOrder = $connected->connect->orders->create(
+            ['items' => [self::ITEM], 'fee' => 500],
+        );
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->authorization());
 
         $shown = self::dumps('connected', $connected)
             + self::dumps('user', $user)
-            + self::dumps('checkout', $checkout)
+            + self::dumps('connectOrder', $connectOrder)
             + self::dumps('request', $this->api->last()->request)
-            + self::dumps('response', $checkout->getLastResponse());
+            + self::dumps('response', $connectOrder->getLastResponse());
         self::assertNoSecrets($shown);
         self::assertStringContainsString('raya_at_live_…9hJk', $shown['connected: print_r']);
         self::assertStringContainsString('Bearer raya_at_live_…9hJk', $shown['request: print_r']);
@@ -484,14 +486,17 @@ final class SecurityTest extends TestCase
                 ['object' => 'payment', 'id' => 'p'],
             )->refund($other),
             'User::retrieve' => static fn(): mixed => User::retrieve('u', $other),
-            'Checkout::create' => static fn(): mixed => Checkout::create(
+            'ConnectOrder::create' => static fn(): mixed => ConnectOrder::create(
                 ['items' => [self::ITEM]],
                 $other,
             ),
-            'Checkout::retrieve' => static fn(): mixed => Checkout::retrieve('c', $other),
-            'Checkout::refundById' => static fn(): mixed => Checkout::refundById('c', $other),
-            '$checkout->refund' => static fn(): mixed => Checkout::constructFrom(
-                ['object' => 'checkout', 'id' => 'c'],
+            'ConnectOrder::retrieve' => static fn(): mixed => ConnectOrder::retrieve('c', $other),
+            'ConnectOrder::refundById' => static fn(): mixed => ConnectOrder::refundById(
+                'c',
+                $other,
+            ),
+            '$connectOrder->refund' => static fn(): mixed => ConnectOrder::constructFrom(
+                ['object' => 'connect.order', 'id' => 'c'],
             )->refund($other),
         ];
         foreach ($global as $name => $call) {
@@ -882,32 +887,32 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             'users->retrieve recibe 2 argumentos (userId y options), no 3',
         ];
-        yield 'checkout->orders->create' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->create(
                 ['items' => [self::ITEM]],
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->create recibe 2 argumentos (params y options), no 3',
+            'connect->orders->create recibe 2 argumentos (params y options), no 3',
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->retrieve(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->retrieve recibe 2 argumentos (checkoutId y options), no 3',
+            'connect->orders->retrieve recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->refund(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->refund recibe 2 argumentos (checkoutId y options), no 3',
+            'connect->orders->refund recibe 2 argumentos (orderId y options), no 3',
         ];
         yield 'OAuth::token' => [
             static fn(MockApi $api): mixed => OAuth::token(
@@ -927,39 +932,39 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             'User::retrieve recibe 2 argumentos (userId y options), no 3',
         ];
-        yield 'Checkout::create' => [
-            static fn(MockApi $api): mixed => Checkout::create(
+        yield 'ConnectOrder::create' => [
+            static fn(MockApi $api): mixed => ConnectOrder::create(
                 ['items' => [self::ITEM]],
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::create recibe 2 argumentos (params y options), no 3',
+            'ConnectOrder::create recibe 2 argumentos (params y options), no 3',
         ];
-        yield 'Checkout::retrieve' => [
-            static fn(MockApi $api): mixed => Checkout::retrieve(
+        yield 'ConnectOrder::retrieve' => [
+            static fn(MockApi $api): mixed => ConnectOrder::retrieve(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::retrieve recibe 2 argumentos (checkoutId y options), no 3',
+            'ConnectOrder::retrieve recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield 'Checkout::refundById' => [
-            static fn(MockApi $api): mixed => Checkout::refundById(
+        yield 'ConnectOrder::refundById' => [
+            static fn(MockApi $api): mixed => ConnectOrder::refundById(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::refundById recibe 2 argumentos (checkoutId y options), no 3',
+            'ConnectOrder::refundById recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield '$checkout->refund' => [
-            static fn(MockApi $api): mixed => Checkout::constructFrom(
-                ['object' => 'checkout', 'id' => 'c'],
+        yield '$connectOrder->refund' => [
+            static fn(MockApi $api): mixed => ConnectOrder::constructFrom(
+                ['object' => 'connect.order', 'id' => 'c'],
             )->refund([], ['api_key' => Fixtures::OTHER_KEY]),
             \ArgumentCountError::class,
-            '$checkout->refund recibe 1 argumento (options), no 2',
+            '$connectOrder->refund recibe 1 argumento (options), no 2',
         ];
 
         // Una opción entre los parámetros: el SDK la rechaza («va en las opciones»).
@@ -997,12 +1002,12 @@ final class SecurityTest extends TestCase
             \TypeError::class,
             'transfers->list no acepta apiKey entre los parámetros: va en las opciones',
         ];
-        yield 'api_key entre los parámetros de checkout->orders->create' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+        yield 'api_key entre los parámetros de connect->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->create(
                 ['items' => [self::ITEM], 'api_key' => Fixtures::OTHER_KEY],
             ),
             \TypeError::class,
-            'checkout->orders->create no acepta api_key entre los parámetros: va en las opciones',
+            'connect->orders->create no acepta api_key entre los parámetros: va en las opciones',
         ];
         yield 'api_key entre los parámetros de oauth->token' => [
             static fn(MockApi $api): mixed => $api->client(null)->oauth->token(

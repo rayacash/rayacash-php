@@ -498,26 +498,26 @@ final class RequestsTest extends TestCase
             Fixtures::OAUTH_TOKEN,
             'un usuario',
         ];
-        yield 'checkout->orders->create' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->create([
+        yield 'connect->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->create([
                 'items' => [['title' => 'Pedido 1042', 'quantity' => 1, 'unit_price' => 45000]],
             ]),
             Fixtures::PAYMENT_PENDING,
-            'un checkout',
+            'un pago de Connect',
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
-                Fixtures::CHECKOUT_ID,
+        yield 'connect->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->retrieve(
+                Fixtures::CONNECT_ORDER_ID,
             ),
             Fixtures::USER,
-            'un checkout',
+            'un pago de Connect',
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
-                Fixtures::CHECKOUT_ID,
+        yield 'connect->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->refund(
+                Fixtures::CONNECT_ORDER_ID,
             ),
-            Fixtures::EVENT_CHECKOUT_SUCCEEDED,
-            'un checkout',
+            Fixtures::EVENT_CONNECT_ORDER_SUCCEEDED,
+            'un pago de Connect',
         ];
     }
 

@@ -14,7 +14,7 @@ use RayaCash\Util\LoggerInterface;
 /**
  * El estilo global, como stripe-php: `RayaCash::setApiKey(…)` y después `Payment::create(…)`.
  *
- * Solo lo usan los métodos estáticos de Balance, Transfer, Payment, OAuth, User y Checkout: un
+ * Solo lo usan los métodos estáticos de Balance, Transfer, Payment, OAuth, User y ConnectOrder: un
  * RayaClient tiene su propia configuración y nunca la lee, salvo el logging (setLog(), setLogger()
  * y RAYA_LOG), que vale para todo el proceso. Cada valor se valida al asignarlo, salvo la clave,
  * que se valida en cada request (así un .env vacío no rompe el arranque de tu framework). Los
@@ -24,7 +24,7 @@ use RayaCash\Util\LoggerInterface;
 final class RayaCash
 {
     /** La versión del SDK: la única fuente (User-Agent, CHANGELOG, release). */
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
     public const DEFAULT_API_BASE = 'https://api.raya.cash';
     /** Segundos por intento: el servidor corta a los 60 s y crear un pago puede tardar ~40 s. */
     public const DEFAULT_TIMEOUT = 65;

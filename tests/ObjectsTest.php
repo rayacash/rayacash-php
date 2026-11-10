@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace RayaCash\Tests;
 
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Event;
 use RayaCash\Exception\ApiException;
 use RayaCash\Internal\Hydrator;
@@ -69,19 +69,19 @@ final class ObjectsTest extends TestCase
         self::assertSame('María Ejemplo', $succeeded->payer->name);
     }
 
-    public function testCheckoutNestedObjectsAndPlainMetadata(): void
+    public function testConnectOrderNestedObjectsAndPlainMetadata(): void
     {
-        $pending = self::convertAs(Checkout::class, Fixtures::CHECKOUT_PENDING);
-        self::assertSame(Checkout\BankTransfer::class, $pending->bank_transfer::class);
+        $pending = self::convertAs(ConnectOrder::class, Fixtures::CONNECT_ORDER_PENDING);
+        self::assertSame(ConnectOrder\BankTransfer::class, $pending->bank_transfer::class);
         self::assertSame('0000123390456538582824', $pending->bank_transfer->cvu);
-        self::assertSame(Checkout\BackUrls::class, $pending->back_urls::class);
+        self::assertSame(ConnectOrder\BackUrls::class, $pending->back_urls::class);
         self::assertSame(
             'https://tienda.example.com/pedidos/1042/error',
             $pending->back_urls->failure,
         );
         // Los ítems: una lista de Item.
         self::assertCount(1, $pending->items);
-        self::assertSame(Checkout\Item::class, $pending->items[0]::class);
+        self::assertSame(ConnectOrder\Item::class, $pending->items[0]::class);
         self::assertSame(
             ['Pedido 1042', 1, 45000],
             [
@@ -92,13 +92,34 @@ final class ObjectsTest extends TestCase
         );
         self::assertNull($pending->payer);
         self::assertSame(['pedido_id' => '1042'], $pending->metadata); // un array común
-        self::assertSame(Fixtures::CHECKOUT_PENDING, self::jsonRoundTrip($pending));
-        self::assertSame(Fixtures::CHECKOUT_PENDING, $pending->toArray());
-        $succeeded = self::convertAs(Checkout::class, Fixtures::CHECKOUT_SUCCEEDED);
-        self::assertSame(Checkout\Payer::class, get_debug_type($succeeded->payer));
+        self::assertSame(Fixtures::CONNECT_ORDER_PENDING, self::jsonRoundTrip($pending));
+        self::assertSame(Fixtures::CONNECT_ORDER_PENDING, $pending->toArray());
+        $succeeded = self::convertAs(ConnectOrder::class, Fixtures::CONNECT_ORDER_SUCCEEDED);
+        self::assertSame(ConnectOrder\Payer::class, get_debug_type($succeeded->payer));
         self::assertSame('María Ejemplo', $succeeded->payer?->name);
-        $empty = Checkout::constructFrom(['object' => 'checkout', 'items' => []]);
+        $empty = ConnectOrder::constructFrom(['object' => 'connect.order', 'items' => []]);
         self::assertSame([], $empty->items);
+    }
+
+    /**
+     * "connect.order" se busca entero, con su punto: hidrata un ConnectOrder también anidado en un
+     * objeto sin clase propia, y otro tipo con punto o una de sus partes ("connect", "order")
+     * quedan como RayaObject.
+     */
+    public function testConnectOrderObjectNameWithADot(): void
+    {
+        self::assertSame('connect.order', ConnectOrder::OBJECT_NAME);
+        $order = RayaObject::constructFrom(['order' => Fixtures::CONNECT_ORDER_PENDING])['order'];
+        self::assertInstanceOf(ConnectOrder::class, $order);
+        self::assertSame('connect.order', $order->object);
+        $unknown = RayaObject::constructFrom([
+            'a' => [...Fixtures::CONNECT_ORDER_PENDING, 'object' => 'connect.order_v2'],
+            'b' => [...Fixtures::CONNECT_ORDER_PENDING, 'object' => 'connect'],
+            'c' => [...Fixtures::CONNECT_ORDER_PENDING, 'object' => 'order'],
+        ]);
+        foreach (['a', 'b', 'c'] as $key) {
+            self::assertSame(RayaObject::class, get_debug_type($unknown[$key]), $key);
+        }
     }
 
     public function testUserNestedObjects(): void
@@ -171,15 +192,37 @@ final class ObjectsTest extends TestCase
         self::assertSame("{\n  \"access_token\": \"\"\n}", (string) $empty);
     }
 
-    public function testEventHydratesACheckout(): void
+    /** El de la cuenta de prueba de una app (raya_at_test_…): la misma máscara, con su prefijo. */
+    public function testOAuthTokenShowsATestModeAccessTokenMaskedWithItsPrefix(): void
     {
-        $event = Event::constructFrom(Fixtures::EVENT_CHECKOUT_SUCCEEDED);
-        self::assertSame(Event::TYPE_CHECKOUT_SUCCEEDED, $event->type);
+        $values = [...Fixtures::OAUTH_TOKEN, 'access_token' => Fixtures::TEST_MODE_ACCESS_TOKEN];
+        $token = self::convertAs(OAuthToken::class, $values);
+        self::assertSame(Fixtures::TEST_MODE_ACCESS_TOKEN, $token->access_token);
+        $masked = 'raya_at_test_…L0sA';
+        self::assertSame(
+            self::sortedKeys([...$values, 'access_token' => $masked]),
+            json_decode((string) $token, true, 512, JSON_THROW_ON_ERROR),
+        );
+        $printed = print_r($token, true);
+        self::assertStringContainsString("[access_token] => {$masked}", $printed);
+        $secret = substr(Fixtures::TEST_MODE_ACCESS_TOKEN, strlen('raya_at_test_'));
+        foreach ([(string) $token, $printed] as $shown) {
+            self::assertStringNotContainsString($secret, $shown);
+        }
+        // Para guardarlo, entero.
+        self::assertSame($values, $token->toArray());
+    }
+
+    public function testEventHydratesAConnectOrder(): void
+    {
+        $event = Event::constructFrom(Fixtures::EVENT_CONNECT_ORDER_SUCCEEDED);
+        self::assertSame(Event::TYPE_CONNECT_ORDER_SUCCEEDED, $event->type);
+        self::assertSame('connect.order.succeeded', $event->type);
         $object = $event->data->object;
-        self::assertSame(Checkout::class, get_debug_type($object));
-        self::assertInstanceOf(Checkout::class, $object);
+        self::assertSame(ConnectOrder::class, get_debug_type($object));
+        self::assertInstanceOf(ConnectOrder::class, $object);
         self::assertSame(['succeeded', 500], [$object->status, $object->fee]);
-        self::assertSame(Checkout\Item::class, get_debug_type($object->items[0]));
+        self::assertSame(ConnectOrder\Item::class, get_debug_type($object->items[0]));
     }
 
     public function testMetadataKeysCanShadowDictMethods(): void
@@ -901,12 +944,12 @@ final class ObjectsTest extends TestCase
                 ]),
             ],
             'un usuario' => [
-                Fixtures::CHECKOUT_PENDING,
+                Fixtures::CONNECT_ORDER_PENDING,
                 static fn() => $client->users->retrieve('me'),
             ],
-            'un checkout' => [
+            'un pago de Connect' => [
                 Fixtures::OAUTH_TOKEN,
-                static fn() => $client->checkout->orders->retrieve('c'),
+                static fn() => $client->connect->orders->retrieve('c'),
             ],
         ];
         foreach ($calls as $noun => [$body, $call]) {

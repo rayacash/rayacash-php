@@ -22,6 +22,7 @@ declare(strict_types=1);
 namespace RayaCash\Tests\Types\Data;
 
 use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Payment;
 use RayaCash\RayaClient;
 use RayaCash\Webhook;
@@ -87,15 +88,24 @@ function expectErrors(RayaClient $client, Payment $payment, ?string $header, str
 
     // items es una lista de ítems, no un solo ítem.
     // error: argument.type: Parameter #1 $params
-    $client->checkout->orders->create(['items' => ['title' => 'x', 'quantity' => 1]]);
+    $client->connect->orders->create(['items' => ['title' => 'x', 'quantity' => 1]]);
 
     // fee es un monto, no un bool.
     // error: argument.type: Parameter #1 $params
+    $client->connect->orders->create(['items' => [], 'fee' => true]);
+
+    // Por id, con el estilo global, es ConnectOrder::refundById(): refund() es del pago que ya
+    // tenés.
+    // error: method.staticCall: Static call to instance method RayaCash\ConnectOrder::refund()
+    // error: argument.type: Parameter #1 $options
+    ConnectOrder::refund('id');
+
+    // Los nombres de la 1.1.0 (alias deprecados) piden lo mismo que los nuevos: fee es un monto…
+    // error: argument.type: Parameter #1 $params
     $client->checkout->orders->create(['items' => [], 'fee' => true]);
 
-    // Por id, con el estilo global, es Checkout::refundById(): refund() es del checkout que ya
-    // tenés.
-    // error: method.staticCall: Static call to instance method RayaCash\Checkout::refund()
-    // error: argument.type: Parameter #1 $options
-    Checkout::refund('id');
+    // …y el id se llama $orderId, como en PHP: checkoutId (el de la 1.1.0) no tiene alias.
+    // error: argument.missing: Missing parameter $orderId
+    // error: argument.unknown: Unknown parameter $checkoutId
+    Checkout::retrieve(checkoutId: 'id');
 }

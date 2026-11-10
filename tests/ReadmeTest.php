@@ -6,7 +6,7 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Event;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\AuthenticationException;
@@ -46,8 +46,8 @@ final class ReadmeTest extends TestCase
         'deposit' => [Transfer::class],
         'token' => [OAuthToken::class],
         'user' => [User::class],
-        'checkout' => [Checkout::class],
-        'object' => [Payment::class, Transfer::class, Checkout::class],
+        'connectOrder' => [ConnectOrder::class],
+        'object' => [Payment::class, Transfer::class, ConnectOrder::class],
         'page' => [ListObject::class],
         'event' => [Event::class],
         'e' => [

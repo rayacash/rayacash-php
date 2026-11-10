@@ -56,7 +56,7 @@ final class ErrorsTest extends TestCase
         ['TRANSFER_NOT_FOUND', 404, NotFoundException::class],
         ['PAYMENT_NOT_FOUND', 404, NotFoundException::class],
         ['USER_NOT_FOUND', 404, NotFoundException::class],
-        ['CHECKOUT_NOT_FOUND', 404, NotFoundException::class],
+        ['ORDER_NOT_FOUND', 404, NotFoundException::class],
         ['NOT_FOUND', 404, NotFoundException::class],
         ['METHOD_NOT_ALLOWED', 405, InvalidRequestException::class],
         ['IDEMPOTENCY_KEY_REUSED', 409, IdempotencyException::class],

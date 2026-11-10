@@ -18,7 +18,7 @@ use RayaCash\Internal\Text;
 use RayaCash\Internal\UserAgent;
 use RayaCash\Internal\Validation;
 use RayaCash\Service\BalanceService;
-use RayaCash\Service\CheckoutService;
+use RayaCash\Service\ConnectService;
 use RayaCash\Service\OAuthService;
 use RayaCash\Service\PaymentService;
 use RayaCash\Service\TransferService;
@@ -36,9 +36,9 @@ use RayaCash\Service\UserService;
  * nunca en el navegador, en una app mobile ni en el repositorio. Todo lo que pasás se valida al
  * construirlo, antes de cualquier request.
  *
- * Si tu aplicación cobra a nombre de otras cuentas, un RayaClient armado con el access_token de
- * la cuenta conectada (raya_at_live_…) opera por ella: `$connected->users` y
- * `$connected->checkout->orders`. `$client->oauth->token()` no necesita clave.
+ * Si tu aplicación cobra a nombre de otras cuentas (Raya Connect), un RayaClient armado con el
+ * access_token de la cuenta conectada (raya_at_live_…) opera por ella: `$connected->users` y
+ * `$connected->connect->orders`. `$client->oauth->token()` no necesita clave.
  *
  * @final
  */
@@ -69,7 +69,21 @@ class RayaClient
     public readonly UserService $users;
 
     /** Cobrar a nombre de una cuenta conectada, con tu comisión (con su access_token). */
-    public readonly CheckoutService $checkout;
+    public readonly ConnectService $connect;
+
+    /**
+     * El nombre de `$connect` en la 1.1.0: el mismo objeto, así `$client->checkout->orders`
+     * sigue andando (y llama a /v1/connect/orders).
+     *
+     * Para tu IDE y PHPStan es un CheckoutService, como en la 1.1.0 (en PHP, CheckoutService es
+     * ConnectService): así `$client->checkout->orders->create()` les devuelve un Checkout, como
+     * antes (ver src/Service/CheckoutService.php).
+     *
+     * @deprecated Desde la 1.2.0: usá `$client->connect`, que es el mismo objeto. Se elimina en
+     *     la 2.0.0.
+     * @var Service\CheckoutService
+     */
+    public readonly ConnectService $checkout;
 
     private readonly ClientConfig $config;
     private readonly Requestor $requestor;
@@ -188,7 +202,12 @@ class RayaClient
         $this->payments = new PaymentService($this->requestor);
         $this->oauth = new OAuthService($this->requestor);
         $this->users = new UserService($this->requestor);
-        $this->checkout = new CheckoutService($this->requestor);
+        $this->connect = new ConnectService($this->requestor);
+        // El mismo objeto. PHPStan no ve el alias: para él, el CheckoutService de $checkout es una
+        // subclase de ConnectService (la declaración de src/Service/CheckoutService.php), y en PHP
+        // es la misma clase.
+        // @phpstan-ignore assign.propertyType
+        $this->checkout = $this->connect;
     }
 
     /**

@@ -6,7 +6,7 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\AuthenticationException;
 use RayaCash\Exception\InvalidRequestException;
@@ -470,7 +470,7 @@ final class EndpointsTest extends TestCase
         self::assertSame('reembolso-1', $request->header('idempotency-key'));
     }
 
-    // --- Apps y cuentas conectadas ----------------------------------------------------------
+    // --- Raya Connect: apps y cuentas conectadas --------------------------------------------
 
     /** POST /v1/oauth/token: sin Authorization ni Idempotency-Key; grant_type lo pone el SDK. */
     public function testOAuthToken(): void
@@ -481,7 +481,7 @@ final class EndpointsTest extends TestCase
         self::assertSame(OAuthToken::class, $token::class);
         self::assertSame(Fixtures::ACCESS_TOKEN, $token->access_token);
         self::assertSame(Fixtures::USER_ID, $token->user_id);
-        self::assertSame(['Bearer', 'checkout profile'], [$token->token_type, $token->scope]);
+        self::assertSame(['Bearer', 'orders profile'], [$token->token_type, $token->scope]);
         self::assertNull($token->expires_in);
         self::assertNull($token->refresh_token);
         $request = $this->api->last();
@@ -650,12 +650,12 @@ final class EndpointsTest extends TestCase
         self::assertCount(3, $this->api->requests);
     }
 
-    /** POST /v1/checkout/orders: el body en el orden de la API, con la metadata como objeto. */
-    public function testCheckoutCreate(): void
+    /** POST /v1/connect/orders: el body en el orden de la API, con la metadata como objeto. */
+    public function testConnectOrderCreate(): void
     {
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $checkout = $connected->checkout->orders->create([
+        $connectOrder = $connected->connect->orders->create([
             'items' => [self::ITEM],
             'fee' => 500,
             'external_reference' => 'pedido-1042',
@@ -667,17 +667,21 @@ final class EndpointsTest extends TestCase
             'notification_url' => Fixtures::NOTIFICATION_URL,
             'metadata' => ['pedido_id' => '1042'],
         ]);
-        self::assertSame(Checkout::class, $checkout::class);
-        self::assertSame('pending', $checkout->status);
+        self::assertSame(ConnectOrder::class, $connectOrder::class);
+        self::assertSame('pending', $connectOrder->status);
         self::assertSame(
             [45000, 500, 44500],
-            [$checkout->amount, $checkout->fee, $checkout->net_amount],
+            [$connectOrder->amount, $connectOrder->fee, $connectOrder->net_amount],
         );
-        self::assertSame('0000123390456538582824', $checkout->bank_transfer->cvu);
-        self::assertStringEndsWith('/checkout/' . Fixtures::CHECKOUT_ID, $checkout->checkout_url);
-        self::assertSame(Fixtures::USER_ID, $checkout->account);
+        self::assertSame('0000123390456538582824', $connectOrder->bank_transfer->cvu);
+        // La página de pago sigue en raya.cash/checkout/<id>.
+        self::assertStringEndsWith(
+            '/checkout/' . Fixtures::CONNECT_ORDER_ID,
+            $connectOrder->checkout_url,
+        );
+        self::assertSame(Fixtures::USER_ID, $connectOrder->account);
         $request = $this->api->last();
-        self::assertSame(['POST', '/v1/checkout/orders'], [$request->method, $request->path]);
+        self::assertSame(['POST', '/v1/connect/orders'], [$request->method, $request->path]);
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $request->header('authorization'));
         self::assertSame(
             '{"items":[{"title":"Pedido 1042","quantity":1,"unit_price":45000}],"fee":500,'
@@ -696,11 +700,11 @@ final class EndpointsTest extends TestCase
     }
 
     /** fee y unit_price viajan como números JSON exactos, como amount; lo demás, solo si vino. */
-    public function testCheckoutCreateSendsCanonicalAmountsAndOnlyWhatYouPass(): void
+    public function testConnectOrderCreateSendsCanonicalAmountsAndOnlyWhatYouPass(): void
     {
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $connected->checkout->orders->create(
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connected->connect->orders->create(
             [
                 'items' => [
                     ['title' => 'Remera', 'quantity' => 2, 'unit_price' => '1500.50'],
@@ -715,18 +719,18 @@ final class EndpointsTest extends TestCase
                 'back_urls' => null,
                 'expires_in' => 3600,
             ],
-            ['idempotency_key' => 'pedido-1043-checkout'],
+            ['idempotency_key' => 'pedido-1043-connect'],
         );
         self::assertSame(
             '{"items":[{"title":"Remera","quantity":2,"unit_price":1500.5},'
                 . '{"title":"Envio","quantity":1,"unit_price":800}],"fee":120.5,"expires_in":3600}',
             $this->api->last()->body,
         );
-        self::assertSame('pedido-1043-checkout', $this->api->last()->header('idempotency-key'));
+        self::assertSame('pedido-1043-connect', $this->api->last()->header('idempotency-key'));
 
         // Una metadata vacía viaja como {}, y unas back_urls sin URLs no viajan.
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $connected->checkout->orders->create([
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connected->connect->orders->create([
             'items' => [self::ITEM],
             'fee' => null,
             'metadata' => [],
@@ -746,23 +750,26 @@ final class EndpointsTest extends TestCase
         );
         $error = self::assertThrows(
             InvalidRequestException::class,
-            static fn() => $connected->checkout->orders->create(
+            static fn() => $connected->connect->orders->create(
                 // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
-                ['items' => [['quantity' => 1, 'unit_price' => 45000]]],
+                ['items' => [['quantity' => 1, 'unit_price' => 45000], ['title' => 'Envio']]],
             ),
             errorCode: 'PARAMETER_MISSING',
         );
         self::assertSame('items[0].title', $error->getParam());
-        self::assertSame('{"items":[{"quantity":1,"unit_price":45000}]}', $this->api->last()->body);
+        self::assertSame(
+            '{"items":[{"quantity":1,"unit_price":45000},{"title":"Envio"}]}',
+            $this->api->last()->body,
+        );
         self::assertCount(3, $this->api->requests);
     }
 
     /** Lo que nunca puede andar falla antes de mandar nada; los rangos los valida la API. */
-    public function testCheckoutCreateRejectsWhatCannotWork(): void
+    public function testConnectOrderCreateRejectsWhatCannotWork(): void
     {
-        $orders = $this->api->client(Fixtures::ACCESS_TOKEN)->checkout->orders;
+        $orders = $this->api->client(Fixtures::ACCESS_TOKEN)->connect->orders;
         // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan: los casos de abajo)
-        $create = static fn(array $params): Checkout => $orders->create($params);
+        $create = static fn(array $params): ConnectOrder => $orders->create($params);
         $cases = [
             [
                 ['items' => self::ITEM],
@@ -814,20 +821,20 @@ final class EndpointsTest extends TestCase
             ],
             [
                 ['items' => [self::ITEM], 'marketplace_fee' => 500],
-                'checkout->orders->create no acepta "marketplace_fee": los parámetros son items, '
+                'connect->orders->create no acepta "marketplace_fee": los parámetros son items, '
                     . 'fee, description, external_reference, metadata, back_urls, auto_return, '
                     . 'notification_url y expires_in.',
             ],
             [
                 ['items' => [self::ITEM], 'notificationUrl' => Fixtures::NOTIFICATION_URL],
-                'checkout->orders->create no acepta "notificationUrl" (¿quisiste decir '
+                'connect->orders->create no acepta "notificationUrl" (¿quisiste decir '
                     . 'notification_url?): los parámetros son items, fee, description, '
                     . 'external_reference, metadata, back_urls, auto_return, notification_url y '
                     . 'expires_in.',
             ],
             [
                 ['items' => [self::ITEM], 'idempotency_key' => 'k'],
-                'checkout->orders->create no acepta idempotency_key entre los parámetros: va en '
+                'connect->orders->create no acepta idempotency_key entre los parámetros: va en '
                     . "las opciones, el último argumento (['idempotency_key' => …]).",
             ],
         ];
@@ -848,63 +855,63 @@ final class EndpointsTest extends TestCase
         self::assertSame([], $this->api->requests);
     }
 
-    public function testCheckoutRetrieve(): void
+    public function testConnectOrderRetrieve(): void
     {
-        $this->api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $checkout = $connected->checkout->orders->retrieve(Fixtures::CHECKOUT_ID);
-        self::assertSame('succeeded', $checkout->status);
-        self::assertSame(45000, $checkout->amount_received);
-        self::assertSame('0000123300602983525937', $checkout->payer?->account);
+        $connectOrder = $connected->connect->orders->retrieve(Fixtures::CONNECT_ORDER_ID);
+        self::assertSame('succeeded', $connectOrder->status);
+        self::assertSame(45000, $connectOrder->amount_received);
+        self::assertSame('0000123300602983525937', $connectOrder->payer?->account);
         self::assertSame(
-            ['GET', '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID],
+            ['GET', '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID],
             [$this->api->last()->method, $this->api->last()->path],
         );
         self::assertSame(
             'Bearer ' . Fixtures::ACCESS_TOKEN,
             $this->api->last()->header('authorization'),
         );
-        $this->api->addError(404, 'CHECKOUT_NOT_FOUND', 'No encontramos ese checkout.');
+        $this->api->addError(404, 'ORDER_NOT_FOUND', 'No encontramos ese pago.');
         self::assertThrows(
             NotFoundException::class,
-            static fn() => $connected->checkout->orders->retrieve(Fixtures::PAYMENT_ID),
-            errorCode: 'CHECKOUT_NOT_FOUND',
+            static fn() => $connected->connect->orders->retrieve(Fixtures::PAYMENT_ID),
+            errorCode: 'ORDER_NOT_FOUND',
         );
         self::assertThrows(
             \ValueError::class,
-            static fn() => $connected->checkout->orders->retrieve('..'),
-            'checkoutId no puede ser "." ni "..".',
+            static fn() => $connected->connect->orders->retrieve('..'),
+            'orderId no puede ser "." ni "..".',
         );
         self::assertCount(2, $this->api->requests);
     }
 
-    public function testCheckoutRefund(): void
+    public function testConnectOrderRefund(): void
     {
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $this->api->add(200, Fixtures::CHECKOUT_REFUNDED);
-        $checkout = $connected->checkout->orders->refund(
-            Fixtures::CHECKOUT_ID,
+        $this->api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
+        $connectOrder = $connected->connect->orders->refund(
+            Fixtures::CONNECT_ORDER_ID,
             ['idempotency_key' => 'reembolso-1'],
         );
-        self::assertSame('refunded', $checkout->status);
+        self::assertSame('refunded', $connectOrder->status);
         $request = $this->api->last();
         self::assertSame(
-            ['POST', '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund'],
+            ['POST', '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund'],
             [$request->method, $request->path],
         );
-        // Como el de un pago: sin body ni Content-Type.
+        // Como el de un pago (Payment): sin body ni Content-Type.
         self::assertNull($request->body);
         self::assertNull($request->header('content-type'));
         self::assertSame('reembolso-1', $request->header('idempotency-key'));
 
-        // Desde el checkout, con el cliente del que vino: devuelve uno nuevo, este no cambia.
-        $this->api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
-        $succeeded = $connected->checkout->orders->retrieve(Fixtures::CHECKOUT_ID);
-        $this->api->add(200, Fixtures::CHECKOUT_REFUNDED);
+        // Desde el pago, con el cliente del que vino: devuelve uno nuevo, este no cambia.
+        $this->api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
+        $succeeded = $connected->connect->orders->retrieve(Fixtures::CONNECT_ORDER_ID);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
         $refunded = $succeeded->refund();
         self::assertSame(['refunded', 'succeeded'], [$refunded->status, $succeeded->status]);
         self::assertSame(
-            '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund',
+            '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund',
             $this->api->last()->path,
         );
         self::assertSame(
@@ -917,8 +924,8 @@ final class EndpointsTest extends TestCase
         );
         self::assertThrows(
             \ValueError::class,
-            static fn() => Checkout::constructFrom(['object' => 'checkout'])->refund(),
-            'Este Checkout no tiene id: no se puede reembolsar.',
+            static fn() => ConnectOrder::constructFrom(['object' => 'connect.order'])->refund(),
+            'Este ConnectOrder no tiene id: no se puede reembolsar.',
         );
         self::assertCount(3, $this->api->requests);
     }
@@ -1009,31 +1016,31 @@ final class EndpointsTest extends TestCase
             'users->retrieve recibe 2 argumentos (userId y options), no 3: las opciones van en el '
                 . "segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->create' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->create(
                 ['items' => [self::ITEM]],
                 [],
                 $options,
             ),
-            'checkout->orders->create recibe 2 argumentos (params y options), no 3: las opciones '
+            'connect->orders->create recibe 2 argumentos (params y options), no 3: las opciones '
                 . "van en el segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->retrieve(
                 'c',
                 [],
                 $options,
             ),
-            'checkout->orders->retrieve recibe 2 argumentos (checkoutId y options), no 3: las '
+            'connect->orders->retrieve recibe 2 argumentos (orderId y options), no 3: las '
                 . "opciones van en el segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->refund(
                 'c',
                 [],
                 $options,
             ),
-            'checkout->orders->refund recibe 2 argumentos (checkoutId y options), no 3: las '
+            'connect->orders->refund recibe 2 argumentos (orderId y options), no 3: las '
                 . "opciones van en el segundo, como ['api_key' => …].",
         ];
     }
@@ -1094,20 +1101,20 @@ final class EndpointsTest extends TestCase
         yield 'users->retrieve' => [
             static fn(RayaClient $client): mixed => $client->users->retrieve('u', $options),
         ];
-        yield 'checkout->orders->create' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->create(
                 ['items' => [self::ITEM]],
                 $options,
             ),
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->retrieve(
                 'c',
                 $options,
             ),
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->refund(
                 'c',
                 $options,
             ),

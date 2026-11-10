@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace RayaCash\Internal;
 
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Event;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
@@ -15,14 +15,18 @@ use RayaCash\Transfer;
 use RayaCash\User;
 
 /**
- * @internal Qué clase le toca a cada valor de "object". Lo que no está acá queda como
- * RayaObject: la API puede sumar tipos y tu código tiene que ignorarlos.
+ * @internal Qué clase le toca a cada valor de "object", entero (con su punto, como
+ * 'connect.order'). Lo que no está acá queda como RayaObject: la API puede sumar tipos y tu código
+ * tiene que ignorarlos.
  */
 final class ObjectTypes
 {
     private const CLASSES = [
         'balance' => Balance::class,
-        'checkout' => Checkout::class,
+        // El nombre de la 1.1.0: la API ya no lo manda, pero lo trae un evento de antes del
+        // cambio si se reenvía.
+        'checkout' => ConnectOrder::class,
+        'connect.order' => ConnectOrder::class,
         'event' => Event::class,
         'list' => ListObject::class,
         'oauth_token' => OAuthToken::class,
@@ -34,7 +38,7 @@ final class ObjectTypes
     // Para el error de un endpoint que respondió otra cosa («…no es una lista»).
     private const NOUNS = [
         Balance::class => 'un saldo',
-        Checkout::class => 'un checkout',
+        ConnectOrder::class => 'un pago de Connect',
         ListObject::class => 'una lista',
         OAuthToken::class => 'un access_token',
         Payment::class => 'un pago',

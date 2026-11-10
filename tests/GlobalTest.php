@@ -6,7 +6,7 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
 use RayaCash\HttpClient\HttpClientInterface;
@@ -103,7 +103,7 @@ final class GlobalTest extends TestCase
         self::assertSame('/v1/payments/' . Fixtures::PAYMENT_ID . '/refund', $api->last()->path);
         self::assertSame('r-1', $api->last()->header('idempotency-key'));
 
-        // Apps y cuentas conectadas. OAuth::token no lleva Authorization: la clave global no viaja.
+        // Raya Connect. OAuth::token no lleva Authorization: la clave global no viaja.
         $api->add(200, Fixtures::OAUTH_TOKEN);
         $token = OAuth::token(self::TOKEN_PARAMS);
         self::assertSame(OAuthToken::class, $token::class);
@@ -121,59 +121,63 @@ final class GlobalTest extends TestCase
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->lastAuthorization());
         self::assertSame('/v1/users/' . Fixtures::USER_ID, $api->last()->path);
 
-        $api->add(201, Fixtures::CHECKOUT_PENDING);
-        $checkout = Checkout::create(['items' => [self::ITEM], 'fee' => 500]);
-        self::assertSame(Checkout::class, $checkout::class);
+        $api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connectOrder = ConnectOrder::create(['items' => [self::ITEM], 'fee' => 500]);
+        self::assertSame(ConnectOrder::class, $connectOrder::class);
         self::assertSame(['items' => [self::ITEM], 'fee' => 500], $api->lastJson());
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->lastAuthorization());
 
-        $api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
-        self::assertSame('succeeded', Checkout::retrieve(Fixtures::CHECKOUT_ID)->status);
+        $api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
+        self::assertSame('succeeded', ConnectOrder::retrieve(Fixtures::CONNECT_ORDER_ID)->status);
 
-        // Checkout.refund(id) en Python y Node; acá, Checkout::refundById($id).
-        $api->add(200, Fixtures::CHECKOUT_REFUNDED);
-        $refunded = Checkout::refundById(Fixtures::CHECKOUT_ID, ['idempotency_key' => 'r-2']);
+        // ConnectOrder.refund(id) en Python y Node; acá, ConnectOrder::refundById($id).
+        $api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
+        $refunded = ConnectOrder::refundById(
+            Fixtures::CONNECT_ORDER_ID,
+            ['idempotency_key' => 'r-2'],
+        );
         self::assertSame('refunded', $refunded->status);
         self::assertSame(
-            '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund',
+            '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund',
             $api->last()->path,
         );
         self::assertSame('r-2', $api->last()->header('idempotency-key'));
     }
 
-    public function testCheckoutInstanceRefund(): void
+    public function testConnectOrderInstanceRefund(): void
     {
         RayaCash::setApiKey(Fixtures::ACCESS_TOKEN);
         RayaCash::setHttpClient($this->api);
-        $this->api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
-        $checkout = Checkout::retrieve(Fixtures::CHECKOUT_ID);
-        $this->api->add(200, Fixtures::CHECKOUT_REFUNDED);
-        $refunded = $checkout->refund();
-        self::assertSame(['refunded', 'succeeded'], [$refunded->status, $checkout->status]);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
+        $connectOrder = ConnectOrder::retrieve(Fixtures::CONNECT_ORDER_ID);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
+        $refunded = $connectOrder->refund();
+        self::assertSame(['refunded', 'succeeded'], [$refunded->status, $connectOrder->status]);
         self::assertSame(
-            '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund',
+            '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund',
             $this->api->last()->path,
         );
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->lastAuthorization());
 
-        // Como con Payment: refundById() es estático y Checkout::refund($id) es un Error del motor.
+        // Como con Payment: refundById() es estático y ConnectOrder::refund($id) es un Error del
+        // motor.
         $error = self::assertThrows(
             \Error::class,
-            // @phpstan-ignore method.staticCall, argument.type (como Checkout.refund(id) en Python)
-            static fn() => Checkout::refund(Fixtures::CHECKOUT_ID),
+            // @phpstan-ignore method.staticCall, argument.type (como ConnectOrder.refund(id))
+            static fn() => ConnectOrder::refund(Fixtures::CONNECT_ORDER_ID),
             'cannot be called statically',
         );
         self::assertSame(\Error::class, $error::class);
         $withoutId = [
             [],
-            ['object' => 'checkout', 'id' => ''],
-            ['object' => 'checkout', 'id' => 7],
+            ['object' => 'connect.order', 'id' => ''],
+            ['object' => 'connect.order', 'id' => 7],
         ];
         foreach ($withoutId as $values) {
             self::assertThrows(
                 \ValueError::class,
-                static fn() => Checkout::constructFrom($values)->refund(),
-                'Este Checkout no tiene id: no se puede reembolsar.',
+                static fn() => ConnectOrder::constructFrom($values)->refund(),
+                'Este ConnectOrder no tiene id: no se puede reembolsar.',
             );
         }
         self::assertCount(2, $this->api->requests);
@@ -626,25 +630,25 @@ final class GlobalTest extends TestCase
             'User::retrieve recibe 2 argumentos (userId y options), no 3: las opciones van en el '
                 . "segundo, como ['api_key' => …].",
         ];
-        yield 'Checkout::create' => [
-            static fn(): mixed => Checkout::create(['items' => [self::ITEM]], [], $options),
-            'Checkout::create recibe 2 argumentos (params y options), no 3: las opciones van en el '
-                . "segundo, como ['api_key' => …].",
-        ];
-        yield 'Checkout::retrieve' => [
-            static fn(): mixed => Checkout::retrieve('c', [], $options),
-            'Checkout::retrieve recibe 2 argumentos (checkoutId y options), no 3: las opciones van '
+        yield 'ConnectOrder::create' => [
+            static fn(): mixed => ConnectOrder::create(['items' => [self::ITEM]], [], $options),
+            'ConnectOrder::create recibe 2 argumentos (params y options), no 3: las opciones van '
                 . "en el segundo, como ['api_key' => …].",
         ];
-        yield 'Checkout::refundById' => [
-            static fn(): mixed => Checkout::refundById('c', [], $options),
-            'Checkout::refundById recibe 2 argumentos (checkoutId y options), no 3: las opciones '
+        yield 'ConnectOrder::retrieve' => [
+            static fn(): mixed => ConnectOrder::retrieve('c', [], $options),
+            'ConnectOrder::retrieve recibe 2 argumentos (orderId y options), no 3: las opciones '
                 . "van en el segundo, como ['api_key' => …].",
         ];
-        yield '$checkout->refund' => [
-            static fn(): mixed => Checkout::constructFrom(Fixtures::CHECKOUT_SUCCEEDED)
+        yield 'ConnectOrder::refundById' => [
+            static fn(): mixed => ConnectOrder::refundById('c', [], $options),
+            'ConnectOrder::refundById recibe 2 argumentos (orderId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield '$connectOrder->refund' => [
+            static fn(): mixed => ConnectOrder::constructFrom(Fixtures::CONNECT_ORDER_SUCCEEDED)
                 ->refund([], $options),
-            '$checkout->refund recibe 1 argumento (options), no 2: las opciones van en el '
+            '$connectOrder->refund recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
         ];
     }

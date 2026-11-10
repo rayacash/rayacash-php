@@ -97,8 +97,8 @@ final class Params
     }
 
     /**
-     * La metadata de un pago o de un checkout, siempre como objeto JSON: un [] vacío de PHP sería
-     * una lista, y la API la rechaza. Una lista suele ser un error (['8812'] por
+     * La metadata de un pago o de un pago de Connect, siempre como objeto JSON: un [] vacío de PHP
+     * sería una lista, y la API la rechaza. Una lista suele ser un error (['8812'] por
      * ['cliente_id' => '8812']), pero PHP también convierte en lista las claves "0", "1"…: el
      * mensaje dice cómo mandarlas. null si no vino.
      */

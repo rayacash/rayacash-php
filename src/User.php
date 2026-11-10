@@ -16,8 +16,8 @@ use RayaCash\Service\UserService;
  * cualquier otro id da USER_NOT_FOUND. Nunca viene la foto del documento ni el número de trámite.
  * Lo que no tenemos viene en null. type puede sumar valores: tu código tiene que ignorarlos.
  *
- * @property-read string $id El user_id que vino con el access_token (y el account de sus
- *     checkouts).
+ * @property-read string $id El user_id que vino con el access_token (y el account de sus pagos
+ *     de Connect).
  * @property-read 'user' $object
  * @property-read 'personal'|'business' $type personal: una persona. business: una empresa, con
  *     business.
@@ -38,8 +38,9 @@ use RayaCash\Service\UserService;
  * @property-read bool $identity_verified Si Raya verificó la identidad de la cuenta.
  * @property-read string|null $verified_at Cuándo la verificó (ISO 8601 en UTC).
  * @property-read User\Business|null $business Los datos de la sociedad; solo en una empresa.
- * @property-read User\Merchant|null $merchant El negocio configurado en Raya (lo que ve quien
- *     paga); null si todavía no lo configuró: no se le pueden crear checkouts.
+ * @property-read User\Merchant|null $merchant El comercio de la cuenta (lo que ve quien paga); null
+ *     hasta que configure su negocio o le crees el primer pago (ahí se lo creamos con sus datos
+ *     legales): no hace falta para cobrarle.
  * @property-read string $created_at Cuándo se creó la cuenta (ISO 8601 en UTC).
  */
 final class User extends RayaObject

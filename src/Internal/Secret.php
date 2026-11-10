@@ -11,9 +11,9 @@ namespace RayaCash\Internal;
  */
 final class Secret
 {
-    // Los prefijos que se conservan al enmascarar: la clave secreta y el access_token de una
-    // cuenta conectada.
-    private const PREFIXES = ['raya_sk_live_', 'raya_at_live_'];
+    // Los prefijos que se conservan al enmascarar: la clave secreta, el access_token de una
+    // cuenta conectada y el de prueba de una app (el de Developers › Apps › tu app › Test).
+    private const PREFIXES = ['raya_sk_live_', 'raya_at_live_', 'raya_at_test_'];
 
     /** @var \WeakMap<self, string>|null */
     private static ?\WeakMap $values = null;
@@ -33,7 +33,10 @@ final class Secret
         return self::values()[$this] ?? '';
     }
 
-    /** raya_sk_live_…AbCd (o raya_at_live_…AbCd), como mask_key de Python; null si está vacía. */
+    /**
+     * raya_sk_live_…AbCd (o raya_at_live_…AbCd, o raya_at_test_…AbCd), como mask_key de Python;
+     * null si está vacía.
+     */
     public function masked(): ?string
     {
         $key = $this->reveal();

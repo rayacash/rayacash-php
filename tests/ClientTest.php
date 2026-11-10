@@ -293,6 +293,27 @@ final class ClientTest extends TestCase
         self::assertCount(2, $this->api->requests);
     }
 
+    /**
+     * El access_token de la cuenta de prueba de una app (raya_at_test_…, el de Developers › Apps ›
+     * tu app › Test) también: viaja igual, y la máscara conserva su prefijo y sus últimos 4.
+     */
+    public function testTestModeAccessTokenIsAKeyMaskedWithItsPrefix(): void
+    {
+        $connected = $this->api->client(Fixtures::TEST_MODE_ACCESS_TOKEN);
+        $this->api->add(200, Fixtures::USER);
+        $connected->users->retrieve('me');
+        self::assertSame(self::bearer(Fixtures::TEST_MODE_ACCESS_TOKEN), $this->authorization());
+        self::assertSame(
+            ['api_base' => 'https://api.raya.cash', 'api_key' => 'raya_at_test_…L0sA'],
+            $connected->__debugInfo(),
+        );
+        // Con 8 caracteres o menos después del prefijo, solo el prefijo (como mask_key).
+        self::assertSame(
+            'raya_at_test_…',
+            (new RayaClient('raya_at_test_12345678'))->__debugInfo()['api_key'],
+        );
+    }
+
     public function testUnknownOptionsAreRejected(): void
     {
         $client = $this->api->client();
