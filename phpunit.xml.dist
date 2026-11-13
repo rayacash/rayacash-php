@@ -46,7 +46,7 @@
         <!-- Todos los avisos, también con el php.ini de producción: un deprecation es un error. -->
         <ini name="error_reporting" value="-1"/>
         <!--
-            Ningún test sale a la red (no hay sandbox: cada request mueve plata). Si un curl se
+            Ningún test sale a la red (con una clave real, cada request mueve plata). Si un curl se
             escapara de la guardia de tests/bootstrap.php, libcurl lo manda a este proxy, donde no
             hay nada. Loopback va directo (los hosts que api_base acepta con http://):
             TransportTest usa un servidor en 127.0.0.1. Para libcurl, ::1 va sin corchetes. Sin

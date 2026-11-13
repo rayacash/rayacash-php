@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Event;
 use RayaCash\Event\Data;
 use RayaCash\Exception\SignatureVerificationException;
+use RayaCash\IdentityVerification;
 use RayaCash\Internal\Timing;
 use RayaCash\Payment;
 use RayaCash\RayaClient;
@@ -419,6 +420,37 @@ final class WebhooksTest extends TestCase
         self::assertSame('succeeded', $payment->status);
         // Viene de un webhook, no de una request: no hay respuesta HTTP.
         self::assertNull($event->getLastResponse());
+    }
+
+    /** Los identity.verification.*: la verificación, siempre con person en null. */
+    public function testConstructEventWithAnIdentityVerification(): void
+    {
+        $body = json_encode(Fixtures::EVENT_VERIFICATION_VERIFIED, JSON_THROW_ON_ERROR);
+        $event = Webhook::constructEvent(
+            $body,
+            WebhookSignature::generateHeader($body, self::SECRET),
+            self::SECRET,
+        );
+        self::assertSame('evt_7cW2pL9xT4bN6kR1mZ8vH3jQ', $event->id);
+        self::assertSame(Event::TYPE_IDENTITY_VERIFICATION_VERIFIED, $event->type);
+        $verification = $event->data->object;
+        self::assertSame(IdentityVerification::class, $verification::class);
+        self::assertInstanceOf(IdentityVerification::class, $verification);
+        self::assertSame(IdentityVerification::STATUS_VERIFIED, $verification->status);
+        self::assertNull($verification->person);
+        self::assertSame('hit', $verification->checks->registry->face_match);
+
+        // Con $client->constructEvent(), ligado al cliente; un cancelado, igual.
+        $body = json_encode(Fixtures::EVENT_VERIFICATION_CANCELED, JSON_THROW_ON_ERROR);
+        $event = $this->api->client()->constructEvent(
+            $body,
+            WebhookSignature::generateHeader($body, self::SECRET),
+            self::SECRET,
+        );
+        self::assertSame('identity.verification.canceled', $event->type);
+        $canceled = $event->data->object;
+        self::assertInstanceOf(IdentityVerification::class, $canceled);
+        self::assertSame(IdentityVerification::STATUS_CANCELED, $canceled->status);
     }
 
     public function testConstructEventTestAndUnknownTypes(): void

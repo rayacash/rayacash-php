@@ -6,13 +6,20 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Exception\ApiConnectionException;
+use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
+use RayaCash\Exception\ConflictException;
 use RayaCash\Exception\InvalidRequestException;
 use RayaCash\Exception\NotFoundException;
+use RayaCash\Exception\PermissionDeniedException;
+use RayaCash\Exception\RateLimitException;
 use RayaCash\Exception\UnprocessableEntityException;
 use RayaCash\HttpClient\TransportException;
+use RayaCash\IdentityVerification;
+use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -24,7 +31,7 @@ use RayaCash\Transfer;
 use RayaCash\User;
 use RayaCash\Util\Uuid;
 
-/** Los 12 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
+/** Los 21 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
 final class EndpointsTest extends TestCase
 {
     private const IDEMPOTENCY_KEY = '9b2f6c4e-1d3a-4e8b-a5c7-0f9e8d7c6b5a';
@@ -470,7 +477,7 @@ final class EndpointsTest extends TestCase
         self::assertSame('reembolso-1', $request->header('idempotency-key'));
     }
 
-    // --- Apps y cuentas conectadas ----------------------------------------------------------
+    // --- Raya Connect: apps y cuentas conectadas --------------------------------------------
 
     /** POST /v1/oauth/token: sin Authorization ni Idempotency-Key; grant_type lo pone el SDK. */
     public function testOAuthToken(): void
@@ -481,7 +488,7 @@ final class EndpointsTest extends TestCase
         self::assertSame(OAuthToken::class, $token::class);
         self::assertSame(Fixtures::ACCESS_TOKEN, $token->access_token);
         self::assertSame(Fixtures::USER_ID, $token->user_id);
-        self::assertSame(['Bearer', 'checkout profile'], [$token->token_type, $token->scope]);
+        self::assertSame(['Bearer', 'orders profile'], [$token->token_type, $token->scope]);
         self::assertNull($token->expires_in);
         self::assertNull($token->refresh_token);
         $request = $this->api->last();
@@ -552,6 +559,17 @@ final class EndpointsTest extends TestCase
                 "oauth->token necesita {$name} como string (",
             );
         }
+        // La pista del client_secret nombra también el de una app de un sandbox.
+        $error = self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (a propósito: falta el client_secret)
+            static fn() => $oauth->token([...self::TOKEN_PARAMS, 'client_secret' => null]),
+        );
+        self::assertSame(
+            'oauth->token necesita client_secret como string (el raya_cs_live_… de Developers › '
+                . 'Apps, o el raya_cs_test_… de una app de un sandbox), no null.',
+            $error->getMessage(),
+        );
         $error = self::assertThrows(
             \TypeError::class,
             // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
@@ -650,12 +668,12 @@ final class EndpointsTest extends TestCase
         self::assertCount(3, $this->api->requests);
     }
 
-    /** POST /v1/checkout/orders: el body en el orden de la API, con la metadata como objeto. */
-    public function testCheckoutCreate(): void
+    /** POST /v1/connect/orders: el body en el orden de la API, con la metadata como objeto. */
+    public function testConnectOrderCreate(): void
     {
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $checkout = $connected->checkout->orders->create([
+        $connectOrder = $connected->connect->orders->create([
             'items' => [self::ITEM],
             'fee' => 500,
             'external_reference' => 'pedido-1042',
@@ -667,17 +685,21 @@ final class EndpointsTest extends TestCase
             'notification_url' => Fixtures::NOTIFICATION_URL,
             'metadata' => ['pedido_id' => '1042'],
         ]);
-        self::assertSame(Checkout::class, $checkout::class);
-        self::assertSame('pending', $checkout->status);
+        self::assertSame(ConnectOrder::class, $connectOrder::class);
+        self::assertSame('pending', $connectOrder->status);
         self::assertSame(
             [45000, 500, 44500],
-            [$checkout->amount, $checkout->fee, $checkout->net_amount],
+            [$connectOrder->amount, $connectOrder->fee, $connectOrder->net_amount],
         );
-        self::assertSame('0000123390456538582824', $checkout->bank_transfer->cvu);
-        self::assertStringEndsWith('/checkout/' . Fixtures::CHECKOUT_ID, $checkout->checkout_url);
-        self::assertSame(Fixtures::USER_ID, $checkout->account);
+        self::assertSame('0000123390456538582824', $connectOrder->bank_transfer->cvu);
+        // La página de pago sigue en raya.cash/checkout/<id>.
+        self::assertStringEndsWith(
+            '/checkout/' . Fixtures::CONNECT_ORDER_ID,
+            $connectOrder->checkout_url,
+        );
+        self::assertSame(Fixtures::USER_ID, $connectOrder->account);
         $request = $this->api->last();
-        self::assertSame(['POST', '/v1/checkout/orders'], [$request->method, $request->path]);
+        self::assertSame(['POST', '/v1/connect/orders'], [$request->method, $request->path]);
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $request->header('authorization'));
         self::assertSame(
             '{"items":[{"title":"Pedido 1042","quantity":1,"unit_price":45000}],"fee":500,'
@@ -696,11 +718,11 @@ final class EndpointsTest extends TestCase
     }
 
     /** fee y unit_price viajan como números JSON exactos, como amount; lo demás, solo si vino. */
-    public function testCheckoutCreateSendsCanonicalAmountsAndOnlyWhatYouPass(): void
+    public function testConnectOrderCreateSendsCanonicalAmountsAndOnlyWhatYouPass(): void
     {
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $connected->checkout->orders->create(
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connected->connect->orders->create(
             [
                 'items' => [
                     ['title' => 'Remera', 'quantity' => 2, 'unit_price' => '1500.50'],
@@ -715,18 +737,18 @@ final class EndpointsTest extends TestCase
                 'back_urls' => null,
                 'expires_in' => 3600,
             ],
-            ['idempotency_key' => 'pedido-1043-checkout'],
+            ['idempotency_key' => 'pedido-1043-connect'],
         );
         self::assertSame(
             '{"items":[{"title":"Remera","quantity":2,"unit_price":1500.5},'
                 . '{"title":"Envio","quantity":1,"unit_price":800}],"fee":120.5,"expires_in":3600}',
             $this->api->last()->body,
         );
-        self::assertSame('pedido-1043-checkout', $this->api->last()->header('idempotency-key'));
+        self::assertSame('pedido-1043-connect', $this->api->last()->header('idempotency-key'));
 
         // Una metadata vacía viaja como {}, y unas back_urls sin URLs no viajan.
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $connected->checkout->orders->create([
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connected->connect->orders->create([
             'items' => [self::ITEM],
             'fee' => null,
             'metadata' => [],
@@ -746,23 +768,26 @@ final class EndpointsTest extends TestCase
         );
         $error = self::assertThrows(
             InvalidRequestException::class,
-            static fn() => $connected->checkout->orders->create(
+            static fn() => $connected->connect->orders->create(
                 // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
-                ['items' => [['quantity' => 1, 'unit_price' => 45000]]],
+                ['items' => [['quantity' => 1, 'unit_price' => 45000], ['title' => 'Envio']]],
             ),
             errorCode: 'PARAMETER_MISSING',
         );
         self::assertSame('items[0].title', $error->getParam());
-        self::assertSame('{"items":[{"quantity":1,"unit_price":45000}]}', $this->api->last()->body);
+        self::assertSame(
+            '{"items":[{"quantity":1,"unit_price":45000},{"title":"Envio"}]}',
+            $this->api->last()->body,
+        );
         self::assertCount(3, $this->api->requests);
     }
 
     /** Lo que nunca puede andar falla antes de mandar nada; los rangos los valida la API. */
-    public function testCheckoutCreateRejectsWhatCannotWork(): void
+    public function testConnectOrderCreateRejectsWhatCannotWork(): void
     {
-        $orders = $this->api->client(Fixtures::ACCESS_TOKEN)->checkout->orders;
+        $orders = $this->api->client(Fixtures::ACCESS_TOKEN)->connect->orders;
         // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan: los casos de abajo)
-        $create = static fn(array $params): Checkout => $orders->create($params);
+        $create = static fn(array $params): ConnectOrder => $orders->create($params);
         $cases = [
             [
                 ['items' => self::ITEM],
@@ -814,20 +839,20 @@ final class EndpointsTest extends TestCase
             ],
             [
                 ['items' => [self::ITEM], 'marketplace_fee' => 500],
-                'checkout->orders->create no acepta "marketplace_fee": los parámetros son items, '
+                'connect->orders->create no acepta "marketplace_fee": los parámetros son items, '
                     . 'fee, description, external_reference, metadata, back_urls, auto_return, '
                     . 'notification_url y expires_in.',
             ],
             [
                 ['items' => [self::ITEM], 'notificationUrl' => Fixtures::NOTIFICATION_URL],
-                'checkout->orders->create no acepta "notificationUrl" (¿quisiste decir '
+                'connect->orders->create no acepta "notificationUrl" (¿quisiste decir '
                     . 'notification_url?): los parámetros son items, fee, description, '
                     . 'external_reference, metadata, back_urls, auto_return, notification_url y '
                     . 'expires_in.',
             ],
             [
                 ['items' => [self::ITEM], 'idempotency_key' => 'k'],
-                'checkout->orders->create no acepta idempotency_key entre los parámetros: va en '
+                'connect->orders->create no acepta idempotency_key entre los parámetros: va en '
                     . "las opciones, el último argumento (['idempotency_key' => …]).",
             ],
         ];
@@ -848,63 +873,63 @@ final class EndpointsTest extends TestCase
         self::assertSame([], $this->api->requests);
     }
 
-    public function testCheckoutRetrieve(): void
+    public function testConnectOrderRetrieve(): void
     {
-        $this->api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $checkout = $connected->checkout->orders->retrieve(Fixtures::CHECKOUT_ID);
-        self::assertSame('succeeded', $checkout->status);
-        self::assertSame(45000, $checkout->amount_received);
-        self::assertSame('0000123300602983525937', $checkout->payer?->account);
+        $connectOrder = $connected->connect->orders->retrieve(Fixtures::CONNECT_ORDER_ID);
+        self::assertSame('succeeded', $connectOrder->status);
+        self::assertSame(45000, $connectOrder->amount_received);
+        self::assertSame('0000123300602983525937', $connectOrder->payer?->account);
         self::assertSame(
-            ['GET', '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID],
+            ['GET', '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID],
             [$this->api->last()->method, $this->api->last()->path],
         );
         self::assertSame(
             'Bearer ' . Fixtures::ACCESS_TOKEN,
             $this->api->last()->header('authorization'),
         );
-        $this->api->addError(404, 'CHECKOUT_NOT_FOUND', 'No encontramos ese checkout.');
+        $this->api->addError(404, 'ORDER_NOT_FOUND', 'No encontramos ese pago.');
         self::assertThrows(
             NotFoundException::class,
-            static fn() => $connected->checkout->orders->retrieve(Fixtures::PAYMENT_ID),
-            errorCode: 'CHECKOUT_NOT_FOUND',
+            static fn() => $connected->connect->orders->retrieve(Fixtures::PAYMENT_ID),
+            errorCode: 'ORDER_NOT_FOUND',
         );
         self::assertThrows(
             \ValueError::class,
-            static fn() => $connected->checkout->orders->retrieve('..'),
-            'checkoutId no puede ser "." ni "..".',
+            static fn() => $connected->connect->orders->retrieve('..'),
+            'orderId no puede ser "." ni "..".',
         );
         self::assertCount(2, $this->api->requests);
     }
 
-    public function testCheckoutRefund(): void
+    public function testConnectOrderRefund(): void
     {
         $connected = $this->api->client(Fixtures::ACCESS_TOKEN);
-        $this->api->add(200, Fixtures::CHECKOUT_REFUNDED);
-        $checkout = $connected->checkout->orders->refund(
-            Fixtures::CHECKOUT_ID,
+        $this->api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
+        $connectOrder = $connected->connect->orders->refund(
+            Fixtures::CONNECT_ORDER_ID,
             ['idempotency_key' => 'reembolso-1'],
         );
-        self::assertSame('refunded', $checkout->status);
+        self::assertSame('refunded', $connectOrder->status);
         $request = $this->api->last();
         self::assertSame(
-            ['POST', '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund'],
+            ['POST', '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund'],
             [$request->method, $request->path],
         );
-        // Como el de un pago: sin body ni Content-Type.
+        // Como el de un pago (Payment): sin body ni Content-Type.
         self::assertNull($request->body);
         self::assertNull($request->header('content-type'));
         self::assertSame('reembolso-1', $request->header('idempotency-key'));
 
-        // Desde el checkout, con el cliente del que vino: devuelve uno nuevo, este no cambia.
-        $this->api->add(200, Fixtures::CHECKOUT_SUCCEEDED);
-        $succeeded = $connected->checkout->orders->retrieve(Fixtures::CHECKOUT_ID);
-        $this->api->add(200, Fixtures::CHECKOUT_REFUNDED);
+        // Desde el pago, con el cliente del que vino: devuelve uno nuevo, este no cambia.
+        $this->api->add(200, Fixtures::CONNECT_ORDER_SUCCEEDED);
+        $succeeded = $connected->connect->orders->retrieve(Fixtures::CONNECT_ORDER_ID);
+        $this->api->add(200, Fixtures::CONNECT_ORDER_REFUNDED);
         $refunded = $succeeded->refund();
         self::assertSame(['refunded', 'succeeded'], [$refunded->status, $succeeded->status]);
         self::assertSame(
-            '/v1/checkout/orders/' . Fixtures::CHECKOUT_ID . '/refund',
+            '/v1/connect/orders/' . Fixtures::CONNECT_ORDER_ID . '/refund',
             $this->api->last()->path,
         );
         self::assertSame(
@@ -917,10 +942,1151 @@ final class EndpointsTest extends TestCase
         );
         self::assertThrows(
             \ValueError::class,
-            static fn() => Checkout::constructFrom(['object' => 'checkout'])->refund(),
-            'Este Checkout no tiene id: no se puede reembolsar.',
+            static fn() => ConnectOrder::constructFrom(['object' => 'connect.order'])->refund(),
+            'Este ConnectOrder no tiene id: no se puede reembolsar.',
         );
         self::assertCount(3, $this->api->requests);
+    }
+
+    // --- Raya Connect: payouts, con la clave secreta de tu cuenta ------------------------------
+
+    /** POST /v1/connect/payouts: el body exacto de la API y la clave secreta como credencial. */
+    public function testConnectPayoutCreate(): void
+    {
+        $this->api->add(201, Fixtures::CONNECT_PAYOUT_PENDING);
+        $payout = $this->api->client()->connect->payouts->create(
+            ['amount' => new FakeDecimal('60000.00'), 'destination' => 'ana.ejemplo'],
+            ['idempotency_key' => self::IDEMPOTENCY_KEY],
+        );
+        self::assertSame(ConnectPayout::class, $payout::class);
+        self::assertSame(ConnectPayout::STATUS_PENDING, $payout->status);
+        self::assertSame(
+            [60000, 870.25, 59129.75],
+            [$payout->amount, $payout->processing_fee, $payout->net_amount],
+        );
+        self::assertSame('ARS', $payout->currency);
+        self::assertSame(ConnectPayout\Origin::class, $payout->origin::class);
+        self::assertSame('0000123368198805021689', $payout->origin->account);
+        self::assertSame('Tienda Ejemplo', $payout->origin->name);
+        self::assertSame(ConnectPayout\Counterparty::class, $payout->counterparty::class);
+        self::assertSame('Ana Ejemplo', $payout->counterparty->name);
+        self::assertSame('20345678902', $payout->counterparty->tax_id);
+        self::assertNull($payout->reference);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', 'https://api.raya.cash/v1/connect/payouts'],
+            [$request->method, $request->url],
+        );
+        self::assertSame('{"amount":60000,"destination":"ana.ejemplo"}', $request->body);
+        self::assertSame('application/json', $request->header('content-type'));
+        self::assertSame(self::IDEMPOTENCY_KEY, $request->header('idempotency-key'));
+        // Con tu clave secreta: la plata sale de tu saldo, no del de una cuenta conectada.
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertSame(self::IDEMPOTENCY_KEY, $payout->getLastResponse()?->idempotencyKey);
+    }
+
+    #[DataProvider('amountForms')]
+    public function testConnectPayoutAmountForms(
+        int|float|string|\Stringable $amount,
+        string $expected,
+    ): void {
+        $this->api->add(201, Fixtures::CONNECT_PAYOUT_PENDING);
+        $this->api->client()->connect->payouts->create(
+            ['amount' => $amount, 'destination' => 'ana.ejemplo'],
+            ['idempotency_key' => 'k'],
+        );
+        self::assertSame(
+            '{"amount":' . $expected . ',"destination":"ana.ejemplo"}',
+            $this->api->last()->body,
+        );
+    }
+
+    /** Lo mismo que en transfers->create: nada sale sin clave de idempotencia y destino string. */
+    public function testConnectPayoutCreateRejectsWhatCannotWork(): void
+    {
+        $payouts = $this->api->client()->connect->payouts;
+        // Sin opciones: PHP no deja llamar sin el segundo argumento.
+        self::assertThrows(
+            \ArgumentCountError::class,
+            // @phpstan-ignore arguments.count (lo que haría alguien sin PHPStan)
+            static fn() => $payouts->create(['amount' => 1, 'destination' => 'x']),
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payouts->create(
+                ['amount' => 1, 'destination' => 'x'],
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['idempotency_key' => null],
+            ),
+            'connect->payouts->create necesita idempotency_key',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $payouts->create(
+                ['amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'con espacios'],
+            ),
+            'idempotency_key tiene que tener de 1 a 255 caracteres ASCII visibles',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payouts->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['amount' => 1, 'destination' => 123],
+                ['idempotency_key' => 'k'],
+            ),
+            'destination tiene que ser un string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payouts->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['amount' => true, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+            ),
+            'amount no puede ser un bool',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $payouts->create(['amount' => 1], ['idempotency_key' => 'k']),
+            'destination tiene que ser un string',
+        );
+        // El body son amount y destination, nada más (el texto de la transferencia es fijo), y la
+        // clave de idempotencia va en las opciones, nunca entre los parámetros.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payouts->create(
+                ['amount' => 1, 'destination' => 'x', 'description' => 'Liquidación'],
+                ['idempotency_key' => 'k'],
+            ),
+            'connect->payouts->create no acepta "description": los parámetros son amount y '
+                . 'destination.',
+        );
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            self::assertThrows(
+                \TypeError::class,
+                static fn() => $payouts->create(
+                    ['amount' => 1, 'destination' => 'x', $name => 'k'],
+                    ['idempotency_key' => 'k'],
+                ),
+                "connect->payouts->create no acepta {$name} entre los parámetros: va en las "
+                    . 'opciones',
+            );
+        }
+        self::assertSame([], $this->api->requests);
+    }
+
+    /** La cuenta sin negocio con cuenta propia: 403 con el código de los payouts. */
+    public function testConnectPayoutCreateWithoutAnOwnOrigin(): void
+    {
+        $message = 'Para enviar payouts, primero configurá el descriptor del comercio en '
+            . 'Configuración › Negocio.';
+        $this->api->addError(403, 'PAYOUT_ORIGIN_UNAVAILABLE', $message);
+        $payouts = $this->api->client()->connect->payouts;
+        $error = self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $payouts->create(
+                ['amount' => 60000, 'destination' => 'ana.ejemplo'],
+                ['idempotency_key' => 'k'],
+            ),
+            $message,
+            'PAYOUT_ORIGIN_UNAVAILABLE',
+        );
+        self::assertSame(403, $error->getCode());
+        self::assertNull($error->getData());
+        self::assertSame('k', $this->api->last()->header('idempotency-key'));
+        self::assertCount(1, $this->api->requests); // un 403 no se reintenta
+    }
+
+    public function testConnectPayoutRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::CONNECT_PAYOUT_COMPLETED);
+        $client = $this->api->client();
+        $payout = $client->connect->payouts->retrieve(Fixtures::CONNECT_PAYOUT_ID);
+        self::assertSame(ConnectPayout::class, $payout::class);
+        self::assertSame('completed', $payout->status);
+        self::assertSame('M7Q2X9T4K1V6N3B8R5W0ZD', $payout->reference);
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/connect/payouts/' . Fixtures::CONNECT_PAYOUT_ID],
+            [$request->method, $request->path],
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+        $this->api->addError(404, 'PAYOUT_NOT_FOUND', 'No encontramos ese payout.');
+        self::assertThrows(
+            NotFoundException::class,
+            static fn() => $client->connect->payouts->retrieve(Fixtures::PAYMENT_ID),
+            'No encontramos ese payout.',
+            'PAYOUT_NOT_FOUND',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $client->connect->payouts->retrieve('..'),
+            'payoutId no puede ser "." ni "..".',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $client->connect->payouts->retrieve(''),
+            'payoutId no puede estar vacío.',
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    public function testConnectPayoutList(): void
+    {
+        $this->api->add(200, Fixtures::CONNECT_PAYOUT_LIST);
+        $client = $this->api->client();
+        $page = $client->connect->payouts->list([
+            'status' => 'completed',
+            'created_gte' => new \DateTimeImmutable('2026-10-23 03:00', new \DateTimeZone('UTC')),
+            'created_lt' => '2026-10-24T00:00:00-03:00',
+            'limit' => 50,
+            'cursor' => 'c0',
+        ]);
+        self::assertSame(ListObject::class, $page::class);
+        $classes = [];
+        foreach ($page as $payout) {
+            $classes[] = $payout::class;
+        }
+        self::assertSame([ConnectPayout::class, ConnectPayout::class], $classes);
+        self::assertFalse($page->has_more);
+        self::assertNull($page->next_cursor);
+        $request = $this->api->last();
+        self::assertSame(['GET', '/v1/connect/payouts'], [$request->method, $request->path]);
+        self::assertSame(
+            [
+                'status' => 'completed',
+                'created_gte' => '2026-10-23T03:00:00+00:00',
+                'created_lt' => '2026-10-24T00:00:00-03:00',
+                'limit' => '50',
+                'cursor' => 'c0',
+            ],
+            $request->query,
+        );
+        self::assertNull($request->body);
+        // Sin filtros, sin query.
+        $this->api->add(200, Fixtures::CONNECT_PAYOUT_LIST);
+        $client->connect->payouts->list();
+        self::assertSame([], $this->api->last()->query);
+        // direction es de transfers: acá no existe.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $client->connect->payouts->list(['direction' => 'inbound']),
+            'connect->payouts->list no acepta "direction"',
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    /** La lista se pagina por su propia ruta y conserva los filtros. */
+    public function testConnectPayoutListWalksPagesOnItsOwnRoute(): void
+    {
+        $this->api->add(
+            200,
+            [...Fixtures::CONNECT_PAYOUT_LIST, 'has_more' => true, 'next_cursor' => 'c1'],
+        );
+        $this->api->add(200, Fixtures::CONNECT_PAYOUT_LIST);
+        $page = $this->api->client()->connect->payouts->list(['status' => 'failed', 'limit' => 2]);
+        $ids = [];
+        foreach ($page->autoPagingIter() as $payout) {
+            $ids[] = $payout->id;
+        }
+        self::assertCount(4, $ids);
+        self::assertCount(2, $this->api->requests);
+        self::assertSame(
+            ['/v1/connect/payouts', ['status' => 'failed', 'limit' => '2', 'cursor' => 'c1']],
+            [$this->api->last()->path, $this->api->last()->query],
+        );
+    }
+
+    // --- Identidad: verificaciones, con la clave secreta de tu cuenta --------------------------
+
+    /** POST /v1/identity/verifications: el body en el orden de la API, no en el de tu array. */
+    public function testIdentityVerificationCreate(): void
+    {
+        $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        $verification = $this->api->client()->identity->verifications->create([
+            'expires_in' => 86400,
+            'return_url' => 'https://tienda.example.com/cuenta',
+            'metadata' => ['plan' => 'pro'],
+            'external_reference' => 'cliente-8812',
+            'type' => 'document',
+        ]);
+        self::assertSame(IdentityVerification::class, $verification::class);
+        self::assertSame(IdentityVerification::STATUS_PENDING, $verification->status);
+        self::assertSame(Fixtures::VERIFICATION_PENDING['url'], $verification->url);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', 'https://api.raya.cash/v1/identity/verifications'],
+            [$request->method, $request->url],
+        );
+        self::assertSame(
+            '{"type":"document","external_reference":"cliente-8812","metadata":{"plan":"pro"},'
+                . '"return_url":"https://tienda.example.com/cuenta","expires_in":86400}',
+            $request->body,
+        );
+        self::assertSame('application/json', $request->header('content-type'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        // Sin clave propia, generamos un UUID v4 para esta llamada.
+        $key = $request->header('idempotency-key') ?? '';
+        self::assertMatchesRegularExpression(self::UUID_V4, $key);
+        self::assertSame($key, $verification->getLastResponse()?->idempotencyKey);
+    }
+
+    public function testIdentityVerificationCreateBiometric(): void
+    {
+        $this->api->add(201, Fixtures::VERIFICATION_BIOMETRIC_VERIFIED);
+        $verification = $this->api->client()->identity->verifications->create([
+            'type' => IdentityVerification::TYPE_BIOMETRIC,
+            'reference' => Fixtures::VERIFICATION_ID,
+        ]);
+        self::assertSame(
+            '{"type":"biometric","reference":"' . Fixtures::VERIFICATION_ID . '"}',
+            $this->api->last()->body,
+        );
+        self::assertSame(Fixtures::BIOMETRIC_VERIFICATION_ID, $verification->id);
+        self::assertSame(Fixtures::VERIFICATION_ID, $verification->reference);
+        self::assertSame('not_applicable', $verification->checks->registry->status);
+    }
+
+    public function testIdentityVerificationCreateSendsOnlyWhatYouPass(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        $verifications->create(
+            [
+                'type' => 'document',
+                'external_reference' => null,
+                'metadata' => null,
+                'return_url' => null,
+                'expires_in' => null,
+                'reference' => null,
+            ],
+            ['idempotency_key' => 'alta-cliente-8812'],
+        );
+        self::assertSame('{"type":"document"}', $this->api->last()->body);
+        self::assertSame('alta-cliente-8812', $this->api->last()->header('idempotency-key'));
+        // La metadata viaja siempre como objeto JSON: [] va como {}, y un stdClass también vale.
+        $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        $verifications->create(['type' => 'document', 'metadata' => []]);
+        self::assertSame('{"type":"document","metadata":{}}', $this->api->last()->body);
+        $verifications->create(['type' => 'document', 'metadata' => (object) ['plan' => 'pro']]);
+        self::assertSame(
+            '{"type":"document","metadata":{"plan":"pro"}}',
+            $this->api->last()->body,
+        );
+    }
+
+    /** Lo que nunca puede andar falla antes de mandar nada. */
+    public function testIdentityVerificationCreateRejectsWhatCannotWork(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->create(['document']),
+            'identity->verifications->create recibe un array con los nombres de los parámetros, '
+                . "como ['type' => 'document'], no una lista.",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $verifications->create(['type' => 'document', 'expires' => 3600]),
+            'identity->verifications->create no acepta "expires": los parámetros son type, '
+                . 'external_reference, metadata, return_url, expires_in y reference.',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $verifications->create(
+                ['type' => 'document', 'externalReference' => 'cliente-8812'],
+            ),
+            'no acepta "externalReference" (¿quisiste decir external_reference?)',
+        );
+        // La clave entre los parámetros se perdería: va en las opciones.
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            self::assertThrows(
+                \TypeError::class,
+                static fn() => $verifications->create(['type' => 'document', $name => 'k']),
+                "identity->verifications->create no acepta {$name} entre los parámetros: va en las "
+                    . 'opciones',
+            );
+        }
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->create(['type' => 'document', 'metadata' => ['pro']]),
+            'metadata tiene que ser un array de string a string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->create(['type' => 'document', 'metadata' => 'plan=pro']),
+            'metadata tiene que ser un array de string a string',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $verifications->create(
+                ['type' => 'document'],
+                ['idempotency_key' => 'con espacios'],
+            ),
+            'idempotency_key tiene que tener de 1 a 255 caracteres ASCII visibles',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $verifications->create(
+                ['type' => 'document'],
+                ['idempotencyKey' => 'k'],
+            ),
+            'options no acepta "idempotencyKey" (¿quisiste decir idempotency_key?)',
+        );
+        self::assertSame([], $this->api->requests);
+    }
+
+    /**
+     * expires_in viaja como vino, como en Node (Python rechaza lo que no es un int): un float sin
+     * decimales sale como entero, y la API lo acepta; un string, tal cual, y la API lo rechaza.
+     */
+    public function testIdentityVerificationExpiresInTravelsAsItCame(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+        $verifications->create(['type' => 'document', 'expires_in' => 86400.0]);
+        self::assertSame('{"type":"document","expires_in":86400}', $this->api->last()->body);
+        $this->api->addError(400, 'PARAMETER_INVALID', 'expires_in…', ['field' => 'expires_in']);
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->create(['type' => 'document', 'expires_in' => '86400']),
+            errorCode: 'PARAMETER_INVALID',
+        );
+        self::assertSame('expires_in', $error->getParam());
+        self::assertSame('{"type":"document","expires_in":"86400"}', $this->api->last()->body);
+    }
+
+    /** Lo demás lo valida la API, como en Node: create([]) llega y vuelve PARAMETER_MISSING. */
+    public function testIdentityVerificationCreateLeavesTheRulesToTheApi(): void
+    {
+        $this->api->addError(
+            400,
+            'PARAMETER_MISSING',
+            'Falta el parámetro type.',
+            ['field' => 'type'],
+        );
+        $verifications = $this->api->client()->identity->verifications;
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            // @phpstan-ignore argument.type (a propósito: falta type)
+            static fn() => $verifications->create([]),
+            'Falta el parámetro type.',
+            'PARAMETER_MISSING',
+        );
+        self::assertSame('type', $error->getParam());
+        self::assertSame('{}', $this->api->last()->body);
+        self::assertCount(1, $this->api->requests);
+    }
+
+    public function testIdentityVerificationRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::VERIFICATION_VERIFIED);
+        $verification = $this->api->client()->identity->verifications->retrieve(
+            Fixtures::VERIFICATION_ID,
+        );
+        self::assertSame(IdentityVerification::class, $verification::class);
+        self::assertSame(IdentityVerification::STATUS_VERIFIED, $verification->status);
+        $person = $verification->person;
+        self::assertNotNull($person);
+        self::assertSame(['María Laura', 'Rosario'], [$person->first_name, $person->address->city]);
+        self::assertSame('hit', $verification->checks->registry->face_match);
+        self::assertSame(1000, $verification->amount);
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID],
+            [$request->method, $request->path],
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->header('content-type'));
+        self::assertNull($request->body);
+        self::assertSame([], $request->query);
+    }
+
+    public function testIdentityVerificationDeclinedComesWithItsReason(): void
+    {
+        $this->api->add(200, Fixtures::VERIFICATION_DECLINED);
+        $verification = $this->api->client()->identity->verifications->retrieve(
+            Fixtures::VERIFICATION_ID,
+        );
+        self::assertSame(IdentityVerification::STATUS_DECLINED, $verification->status);
+        self::assertSame(
+            IdentityVerification\DeclineReason::class,
+            get_debug_type($verification->decline_reason),
+        );
+        self::assertSame(
+            IdentityVerification::DECLINE_CODE_REGISTRY_DATA_MISMATCH,
+            $verification->decline_reason?->code,
+        );
+        self::assertNull($verification->person);
+        self::assertNull($verification->amount);
+        self::assertFalse($verification->checks->registry->data_match);
+    }
+
+    public function testIdentityVerificationIdsAreEncodedAndNeverEmpty(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        $this->api->add(200, Fixtures::VERIFICATION_PENDING);
+        $verifications->retrieve('../cancel');
+        self::assertSame('/v1/identity/verifications/..%2Fcancel', $this->api->last()->path);
+        $instance = static fn(string $id): mixed => IdentityVerification::constructFrom(
+            ['object' => 'identity.verification', 'id' => $id],
+        )->cancel();
+        $calls = [
+            static fn(string $id): mixed => $verifications->retrieve($id),
+            static fn(string $id): mixed => $verifications->cancel($id),
+            static fn(string $id): mixed => $verifications->files($id),
+            $instance,
+        ];
+        $invalid = [
+            ['   ', 'verificationId no puede estar vacío.'],
+            ['.', 'verificationId no puede ser "." ni "..".'],
+            ['..', 'verificationId no puede ser "." ni "..".'],
+        ];
+        foreach ($calls as $call) {
+            foreach ($invalid as [$id, $message]) {
+                self::assertThrows(\ValueError::class, static fn() => $call($id), $message);
+            }
+        }
+        foreach (array_slice($calls, 0, 3) as $call) {
+            self::assertThrows(
+                \ValueError::class,
+                static fn() => $call(''),
+                'verificationId no puede estar vacío.',
+            );
+        }
+        // Una verificación con el id vacío no tiene id.
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $instance(''),
+            'Esta IdentityVerification no tiene id: no se puede cancelar.',
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
+    public function testIdentityVerificationList(): void
+    {
+        $this->api->add(200, Fixtures::VERIFICATION_LIST);
+        $verifications = $this->api->client()->identity->verifications;
+        // Los filtros en cualquier orden: la query sale en el de la API.
+        $page = $verifications->list([
+            'limit' => 50,
+            'cursor' => 'c1',
+            'created_lt' => '2026-10-25T00:00:00+00:00',
+            'created_gte' => new \DateTimeImmutable('2026-11-10 03:00', new \DateTimeZone('UTC')),
+            'external_reference' => 'cliente 8812',
+            'type' => 'document',
+            'status' => 'verified',
+        ]);
+        self::assertSame(ListObject::class, $page::class);
+        $classes = [];
+        foreach ($page as $verification) {
+            $classes[] = $verification::class;
+        }
+        self::assertSame([IdentityVerification::class, IdentityVerification::class], $classes);
+        self::assertTrue($page->has_more);
+        self::assertSame(Fixtures::VERIFICATION_NEXT_CURSOR, $page->next_cursor);
+        $request = $this->api->last();
+        self::assertSame(['GET', '/v1/identity/verifications'], [$request->method, $request->path]);
+        self::assertSame(
+            'https://api.raya.cash/v1/identity/verifications?status=verified&type=document'
+                . '&external_reference=cliente%208812&created_gte=2026-11-10T03%3A00%3A00%2B00%3A00'
+                . '&created_lt=2026-10-25T00%3A00%3A00%2B00%3A00&limit=50&cursor=c1',
+            $request->url,
+        );
+        self::assertNull($request->body);
+        self::assertNull($request->header('idempotency-key'));
+        // Sin filtros, la URL pelada.
+        $this->api->add(200, Fixtures::VERIFICATION_LIST);
+        $verifications->list();
+        self::assertSame(
+            'https://api.raya.cash/v1/identity/verifications',
+            $this->api->last()->url,
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    public function testIdentityVerificationListRejectsWhatCannotWork(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $verifications->list(['estado' => 'verified']),
+            'identity->verifications->list no acepta "estado": los parámetros son status, type, '
+                . 'external_reference, created_gte, created_lt, limit y cursor.',
+        );
+        // direction es de transfers: acá no existe.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $verifications->list(['direction' => 'inbound']),
+            'identity->verifications->list no acepta "direction"',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->list(['limit' => 1.5]),
+            'limit no acepta un float.',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $verifications->list(['status' => true]),
+            'status no puede ser un bool.',
+        );
+        // La Idempotency-Key solo va en los POST.
+        $get = [
+            static fn() => $verifications->retrieve('idv_x', ['idempotency_key' => 'k']),
+            static fn() => $verifications->files('idv_x', ['idempotency_key' => 'k']),
+            static fn() => $verifications->list([], ['idempotency_key' => 'k']),
+        ];
+        foreach ($get as $call) {
+            self::assertThrows(
+                \ValueError::class,
+                $call,
+                'La Idempotency-Key solo va en los POST.',
+            );
+        }
+        self::assertSame([], $this->api->requests);
+    }
+
+    /** La lista se pagina por su propia ruta, con los mismos filtros y las mismas opciones. */
+    public function testIdentityVerificationListWalksPagesOnItsOwnRoute(): void
+    {
+        $this->api->add(200, Fixtures::verificationPage(['idv_1', 'idv_2'], 'c1'));
+        $this->api->add(200, Fixtures::verificationPage(['idv_3', 'idv_4'], 'c2'));
+        $this->api->add(200, Fixtures::verificationPage(['idv_5'], null));
+        $page = $this->api->client()->identity->verifications->list(
+            ['status' => 'verified', 'limit' => 2],
+            ['api_key' => Fixtures::OTHER_KEY],
+        );
+        $ids = [];
+        foreach ($page->autoPagingIter() as $verification) {
+            $ids[] = $verification->id;
+        }
+        self::assertSame(['idv_1', 'idv_2', 'idv_3', 'idv_4', 'idv_5'], $ids);
+        $queries = [];
+        foreach ($this->api->requests as $request) {
+            self::assertSame('/v1/identity/verifications', $request->path);
+            self::assertSame('Bearer ' . Fixtures::OTHER_KEY, $request->header('authorization'));
+            $queries[] = $request->query;
+        }
+        self::assertSame(
+            [
+                ['status' => 'verified', 'limit' => '2'],
+                ['status' => 'verified', 'limit' => '2', 'cursor' => 'c1'],
+                ['status' => 'verified', 'limit' => '2', 'cursor' => 'c2'],
+            ],
+            $queries,
+        );
+    }
+
+    /** POST /v1/identity/verifications/:id/cancel: sin body, solo con su Idempotency-Key. */
+    public function testIdentityVerificationCancel(): void
+    {
+        $this->api->add(200, Fixtures::VERIFICATION_CANCELED);
+        $verifications = $this->api->client()->identity->verifications;
+        $verification = $verifications->cancel(Fixtures::VERIFICATION_ID);
+        self::assertSame(IdentityVerification::class, $verification::class);
+        self::assertSame(IdentityVerification::STATUS_CANCELED, $verification->status);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID . '/cancel'],
+            [$request->method, $request->path],
+        );
+        self::assertNull($request->body);
+        self::assertNull($request->header('content-type'));
+        self::assertMatchesRegularExpression(
+            self::UUID_V4,
+            $request->header('idempotency-key') ?? '',
+        );
+        // Con tu clave. Cancelar una que ya está canceled la devuelve igual.
+        $this->api->add(200, Fixtures::VERIFICATION_CANCELED);
+        $again = $verifications->cancel(
+            Fixtures::VERIFICATION_ID,
+            ['idempotency_key' => 'cancelar-cliente-8812'],
+        );
+        self::assertSame(IdentityVerification::STATUS_CANCELED, $again->status);
+        self::assertSame('cancelar-cliente-8812', $this->api->last()->header('idempotency-key'));
+    }
+
+    public function testIdentityVerificationFiles(): void
+    {
+        $this->api->add(200, Fixtures::VERIFICATION_FILES);
+        $files = $this->api->client()->identity->verifications->files(Fixtures::VERIFICATION_ID);
+        self::assertSame(IdentityVerificationFiles::class, $files::class);
+        self::assertSame(IdentityVerificationFiles\File::class, get_debug_type($files->front));
+        self::assertSame(Fixtures::VERIFICATION_FILES['front']['url'], $files->front?->url);
+        self::assertSame(
+            Fixtures::VERIFICATION_FILES['selfie']['expires_at'],
+            $files->selfie?->expires_at,
+        );
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID . '/files'],
+            [$request->method, $request->path],
+        );
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+    }
+
+    /** Cuatro POST sin clave propia: cuatro UUID v4 distintos, uno por llamada. */
+    public function testIdentityVerificationPostsGenerateANewKeyOnEachCall(): void
+    {
+        $verifications = $this->api->client()->identity->verifications;
+        for ($i = 0; $i < 4; $i++) {
+            $this->api->add(201, Fixtures::VERIFICATION_PENDING);
+        }
+        $verifications->create(['type' => 'document']);
+        $verifications->create(['type' => 'document']);
+        $verifications->cancel(Fixtures::VERIFICATION_ID);
+        $verifications->cancel(Fixtures::VERIFICATION_ID);
+        $keys = [];
+        foreach ($this->api->requests as $request) {
+            $key = $request->header('idempotency-key') ?? '';
+            self::assertMatchesRegularExpression(self::UUID_V4, $key);
+            $keys[] = $key;
+        }
+        self::assertCount(4, array_unique($keys));
+    }
+
+    public function testIdentityVerificationNotFound(): void
+    {
+        $this->api->addError(404, 'VERIFICATION_NOT_FOUND', 'No encontramos esa verificación.');
+        $verifications = $this->api->client()->identity->verifications;
+        $error = self::assertThrows(
+            NotFoundException::class,
+            static fn() => $verifications->retrieve(Fixtures::VERIFICATION_ID),
+            'No encontramos esa verificación.',
+            'VERIFICATION_NOT_FOUND',
+        );
+        self::assertSame('req_test00000000000000000001', $error->getRequestId());
+        self::assertCount(1, $this->api->requests);
+    }
+
+    /** 409 VERIFICATION_NOT_CANCELABLE: una sola request, con el estado en getData(). */
+    public function testIdentityVerificationNotCancelable(): void
+    {
+        $this->api->addError(
+            409,
+            'VERIFICATION_NOT_CANCELABLE',
+            'Solo podés cancelar verificaciones pending o in_progress.',
+            ['status' => 'processing'],
+        );
+        $verifications = $this->api->client()->identity->verifications;
+        $error = self::assertThrows(
+            ConflictException::class,
+            static fn() => $verifications->cancel(
+                Fixtures::VERIFICATION_ID,
+                ['idempotency_key' => 'cancelar-cliente-8812'],
+            ),
+            'Solo podés cancelar verificaciones pending o in_progress.',
+            'VERIFICATION_NOT_CANCELABLE',
+        );
+        self::assertSame(ConflictException::class, $error::class);
+        self::assertSame(['status' => 'processing'], $error->getData());
+        self::assertSame('cancelar-cliente-8812', $error->getIdempotencyKey());
+        self::assertCount(1, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    /** El tope de verificaciones: 429 con Retry-After: 3600, que no se reintenta. */
+    public function testIdentityVerificationLimitIsNotRetried(): void
+    {
+        $this->api->addError(
+            429,
+            'RATE_LIMITED',
+            'Llegaste al máximo de verificaciones por día.',
+            ['limit' => 'daily'],
+            ['Retry-After' => '3600'],
+        );
+        $verifications = $this->api->client()->identity->verifications;
+        $error = self::assertThrows(
+            RateLimitException::class,
+            static fn() => $verifications->create(['type' => 'document']),
+            errorCode: 'RATE_LIMITED',
+        );
+        self::assertSame(3600.0, $error->getRetryAfter());
+        self::assertSame(['limit' => 'daily'], $error->getData());
+        self::assertCount(1, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    /**
+     * Identidad todavía no está disponible en el sandbox: con una clave de prueba responde 403
+     * SANDBOX_NOT_SUPPORTED.
+     */
+    public function testIdentityVerificationSandboxNotSupported(): void
+    {
+        $message = 'Este endpoint todavía no está disponible en un sandbox.';
+        $this->api->addError(403, 'SANDBOX_NOT_SUPPORTED', $message);
+        $verifications = $this->api->client(Fixtures::SANDBOX_KEY)->identity->verifications;
+        self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $verifications->list(),
+            $message,
+            'SANDBOX_NOT_SUPPORTED',
+        );
+        self::assertSame(
+            'Bearer ' . Fixtures::SANDBOX_KEY,
+            $this->api->last()->header('authorization'),
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
+    // --- Sandbox: los test helpers, con la clave secreta de prueba ----------------------------
+
+    /**
+     * POST /v1/test/payments/:id/simulate_transfer, con la clave secreta de prueba en
+     * Authorization y sin Idempotency-Key: sin amount, sin body (el monto exacto); con amount,
+     * {"amount": …} como número JSON.
+     */
+    public function testSandboxSimulateTransfer(): void
+    {
+        $sandbox = $this->api->client(Fixtures::SANDBOX_KEY);
+        $path = '/v1/test/payments/' . Fixtures::SANDBOX_PAYMENT_ID . '/simulate_transfer';
+
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_SUCCEEDED);
+        $payment = $sandbox->testHelpers->payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID);
+        self::assertSame(Payment::class, $payment::class);
+        self::assertSame(['succeeded', 2500], [$payment->status, $payment->amount_received]);
+        self::assertSame('Pagador de prueba', $payment->payer?->name);
+        self::assertSame(Fixtures::SANDBOX_ALIAS, $payment->bank_transfer->alias);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', "https://api.raya.cash{$path}"],
+            [$request->method, $request->url],
+        );
+        self::assertSame('Bearer ' . Fixtures::SANDBOX_KEY, $request->header('authorization'));
+        // Sin amount no va body, como en un reembolso, y nunca Idempotency-Key.
+        self::assertNull($request->body);
+        self::assertNull($request->header('content-type'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertArrayNotHasKey('Idempotency-Key', $request->headers());
+        $response = $payment->getLastResponse();
+        self::assertNotNull($response);
+        self::assertSame(['req_test00000000000000000001', null], [
+            $response->requestId,
+            $response->idempotencyKey,
+        ]);
+
+        // Con menos que el pago: failed, con amount_mismatch (sin el reembolso automático).
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_FAILED);
+        $failed = $sandbox->testHelpers->payments->simulateTransfer(
+            Fixtures::SANDBOX_PAYMENT_ID,
+            ['amount' => 1000],
+        );
+        self::assertSame(
+            ['failed', Payment::FAILURE_CODE_AMOUNT_MISMATCH, 1000, null],
+            [$failed->status, $failed->failure_code, $failed->amount_received, $failed->paid_at],
+        );
+        $request = $this->api->last();
+        self::assertSame(['POST', $path], [$request->method, $request->path]);
+        self::assertSame('{"amount":1000}', $request->body);
+        self::assertSame(['amount' => 1000], $this->api->lastJson());
+        self::assertSame('application/json', $request->header('content-type'));
+        self::assertNull($request->header('idempotency-key'));
+
+        // Con más: succeeded, con lo simulado en amount_received.
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_OVERPAID);
+        $overpaid = $sandbox->testHelpers->payments->simulateTransfer(
+            Fixtures::SANDBOX_PAYMENT_ID,
+            ['amount' => '4000.00'],
+        );
+        self::assertSame(['succeeded', 4000], [$overpaid->status, $overpaid->amount_received]);
+        self::assertSame('{"amount":4000}', $this->api->last()->body);
+
+        // amount en null es como no mandarlo; las opciones de siempre valen.
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_SUCCEEDED);
+        $sandbox->testHelpers->payments->simulateTransfer(
+            Fixtures::SANDBOX_PAYMENT_ID,
+            ['amount' => null],
+            ['timeout' => 5, 'max_network_retries' => 0],
+        );
+        $request = $this->api->last();
+        self::assertNull($request->body);
+        self::assertNull($request->header('idempotency-key'));
+        self::assertSame([5.0, 5.0], [$request->timeout, $request->connectTimeout]);
+        self::assertCount(4, $this->api->requests);
+    }
+
+    /**
+     * En PHP el nombre de un parámetro es parte de la API (los argumentos con nombre): las
+     * opciones se llaman $options en todos los métodos de servicio, también en el helper.
+     */
+    public function testSandboxSimulateTransferTakesTheOptionsByName(): void
+    {
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_SUCCEEDED);
+        $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments->simulateTransfer(
+            Fixtures::SANDBOX_PAYMENT_ID,
+            options: ['timeout' => 5, 'max_network_retries' => 0],
+        );
+        $request = $this->api->last();
+        self::assertSame([5.0, 5.0], [$request->timeout, $request->connectTimeout]);
+        self::assertNull($request->body);
+
+        $names = [];
+        foreach (glob(dirname(__DIR__) . '/src/Service/*.php') ?: [] as $file) {
+            $class = 'RayaCash\\Service\\' . basename($file, '.php');
+            if (str_starts_with(basename($file), 'Checkout')) {
+                continue; // los alias deprecados de la 1.1.0: son las mismas clases de Connect
+            }
+            if (!class_exists($class)) {
+                self::fail($class);
+            }
+            $methods = (new \ReflectionClass($class))->getMethods(\ReflectionMethod::IS_PUBLIC);
+            foreach ($methods as $method) {
+                foreach ($method->getParameters() as $parameter) {
+                    if (str_starts_with($parameter->getName(), 'opt')) {
+                        $names["{$class}::{$method->getName()}"] = $parameter->getName();
+                    }
+                }
+            }
+        }
+        self::assertArrayHasKey(
+            'RayaCash\Service\SandboxPaymentHelpersService::simulateTransfer',
+            $names,
+        );
+        self::assertSame(array_fill_keys(array_keys($names), 'options'), $names);
+    }
+
+    #[DataProvider('amountForms')]
+    public function testSandboxSimulateTransferAmountForms(
+        int|float|string|\Stringable $amount,
+        string $expected,
+    ): void {
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_OVERPAID);
+        $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments->simulateTransfer(
+            Fixtures::SANDBOX_PAYMENT_ID,
+            ['amount' => $amount],
+        );
+        self::assertSame('{"amount":' . $expected . '}', $this->api->last()->body);
+    }
+
+    /**
+     * El id de un pago de Raya Connect de una app del sandbox, con la clave secreta de prueba de
+     * la cuenta dueña de la app: devuelve el ConnectOrder (el registro de clases sigue a
+     * "object").
+     */
+    public function testSandboxSimulateTransferOfAConnectOrder(): void
+    {
+        $this->api->add(200, Fixtures::SANDBOX_ORDER_SUCCEEDED);
+        $sandbox = $this->api->client(Fixtures::SANDBOX_KEY);
+        $order = $sandbox->testHelpers->payments->simulateTransfer(Fixtures::SANDBOX_ORDER_ID);
+        self::assertSame(ConnectOrder::class, $order::class);
+        self::assertInstanceOf(ConnectOrder::class, $order);
+        self::assertSame(
+            ['succeeded', 10, 1490, Fixtures::SANDBOX_TEST_USER_ID],
+            [$order->status, $order->fee, $order->net_amount, $order->account],
+        );
+        self::assertInstanceOf(ConnectOrder\Payer::class, $order->payer);
+        self::assertSame('Pagador de prueba', $order->payer->name);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', '/v1/test/payments/' . Fixtures::SANDBOX_ORDER_ID . '/simulate_transfer'],
+            [$request->method, $request->path],
+        );
+        self::assertSame('Bearer ' . Fixtures::SANDBOX_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+    }
+
+    /**
+     * Los errores propios, con su clase por status y sin reintentos: 404 PAYMENT_NOT_FOUND, 409
+     * PAYMENT_NOT_PENDING (con el estado en getData()) y 403 SANDBOX_ONLY con una clave real.
+     */
+    public function testSandboxSimulateTransferErrors(): void
+    {
+        $payments = $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments;
+        $this->api->addError(404, 'PAYMENT_NOT_FOUND', 'No encontramos ese pago.');
+        $error = self::assertThrows(
+            NotFoundException::class,
+            static fn() => $payments->simulateTransfer(Fixtures::PAYMENT_ID),
+            'No encontramos ese pago.',
+            'PAYMENT_NOT_FOUND',
+        );
+        self::assertSame(NotFoundException::class, $error::class);
+        self::assertNull($error->getIdempotencyKey());
+
+        $message = 'Solo podés simular la transferencia de un pago pendiente.';
+        $this->api->addError(409, 'PAYMENT_NOT_PENDING', $message, ['status' => 'succeeded']);
+        $error = self::assertThrows(
+            ConflictException::class,
+            static fn() => $payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID),
+            $message,
+            'PAYMENT_NOT_PENDING',
+        );
+        // Un ConflictException y no un IdempotencyException: el código no es IDEMPOTENCY_KEY_*.
+        self::assertSame(ConflictException::class, $error::class);
+        self::assertSame(['status' => 'succeeded'], $error->getData());
+        self::assertSame(409, $error->getHttpStatus());
+        self::assertNull($error->getIdempotencyKey());
+
+        // Con una clave real, la API responde 403 SANDBOX_ONLY.
+        $message = 'Este endpoint solo funciona en un sandbox: usá una credencial de prueba.';
+        $this->api->addError(403, 'SANDBOX_ONLY', $message);
+        $live = $this->api->client()->testHelpers->payments;
+        $error = self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $live->simulateTransfer(Fixtures::PAYMENT_ID),
+            $message,
+            'SANDBOX_ONLY',
+        );
+        self::assertSame(PermissionDeniedException::class, $error::class);
+        self::assertSame(
+            'Bearer ' . Fixtures::TEST_KEY,
+            $this->api->last()->header('authorization'),
+        );
+        self::assertCount(3, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    /**
+     * Sin Idempotency-Key, un corte se reintenta igual (como oauth->token), y el error no dice
+     * que se reintente con la misma. Si el intento cortado llegó, el reintento da
+     * PAYMENT_NOT_PENDING: el pago ya se simuló.
+     */
+    public function testSandboxSimulateTransferRetriesWithoutAnIdempotencyKey(): void
+    {
+        $this->api->failWith(TransportException::network('sin red'));
+        $payments = $this->api->client(Fixtures::SANDBOX_KEY, ['max_network_retries' => 0])
+            ->testHelpers->payments;
+        $error = self::assertThrows(
+            ApiConnectionException::class,
+            static fn() => $payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID),
+            errorCode: 'NETWORK_ERROR',
+        );
+        self::assertSame(
+            'No pudimos conectarnos con la API de Raya (sin red).',
+            $error->getMessage(),
+        );
+        self::assertNull($error->getIdempotencyKey());
+
+        $this->api->failWith(TransportException::network('sin red'));
+        $this->api->addError(409, 'PAYMENT_NOT_PENDING', data: ['status' => 'succeeded']);
+        $payments = $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments;
+        self::assertThrows(
+            ConflictException::class,
+            static fn() => $payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID),
+            errorCode: 'PAYMENT_NOT_PENDING',
+        );
+        self::assertCount(3, $this->api->requests);
+        self::assertCount(1, $this->sleeps);
+        foreach ($this->api->requests as $request) {
+            self::assertNull($request->header('idempotency-key'));
+        }
+    }
+
+    /**
+     * Otro tipo de objeto conocido no se puede devolver: INVALID_RESPONSE, con la respuesta. Sin
+     * "object", se arma un Payment.
+     */
+    public function testSandboxSimulateTransferOtherObjectIsAnInvalidResponse(): void
+    {
+        $payments = $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments;
+        $this->api->add(200, Fixtures::TRANSFER_INBOUND);
+        $error = self::assertThrows(
+            ApiException::class,
+            static fn() => $payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID),
+            'La API respondió algo que no es un pago ni un pago de Connect.',
+            'INVALID_RESPONSE',
+        );
+        self::assertSame(
+            [200, 'req_test00000000000000000001', null],
+            [$error->getHttpStatus(), $error->getRequestId(), $error->getIdempotencyKey()],
+        );
+        self::assertSame(
+            json_encode(Fixtures::TRANSFER_INBOUND, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+            $error->getHttpBody(),
+        );
+
+        $this->api->add(200, ['id' => Fixtures::SANDBOX_PAYMENT_ID, 'status' => 'succeeded']);
+        $payment = $payments->simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID);
+        self::assertSame(Payment::class, $payment::class);
+        self::assertCount(2, $this->api->requests);
+    }
+
+    public function testSandboxSimulateTransferRejectsWhatCannotWork(): void
+    {
+        $payments = $this->api->client(Fixtures::SANDBOX_KEY)->testHelpers->payments;
+        $id = Fixtures::SANDBOX_PAYMENT_ID;
+        // Sin Idempotency-Key: un pago se simula una sola vez. Ni en las opciones…
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payments->simulateTransfer($id, [], ['idempotency_key' => 'k']),
+            'testHelpers->payments->simulateTransfer no acepta idempotency_key: no lleva '
+                . 'Idempotency-Key, un pago se simula una sola vez (repetirlo responde '
+                . 'PAYMENT_NOT_PENDING).',
+        );
+        // …ni entre los parámetros (con un mensaje que no la manda a las opciones).
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            $error = self::assertThrows(
+                \TypeError::class,
+                static fn() => $payments->simulateTransfer($id, [$name => 'k']),
+            );
+            self::assertSame(
+                "testHelpers->payments->simulateTransfer no acepta {$name} entre los parámetros: "
+                    . 'no lleva Idempotency-Key, un pago se simula una sola vez (repetirlo '
+                    . 'responde PAYMENT_NOT_PENDING).',
+                $error->getMessage(),
+            );
+        }
+        // amount es el único parámetro, y es un monto.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payments->simulateTransfer($id, ['monto' => 1500]),
+            'testHelpers->payments->simulateTransfer no acepta "monto": los parámetros son '
+                . 'amount.',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payments->simulateTransfer($id, [1500]),
+            'testHelpers->payments->simulateTransfer recibe un array con los nombres de los '
+                . "parámetros, como ['amount' => 1500], no una lista.",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $payments->simulateTransfer($id, ['amount' => true]),
+            'amount no puede ser un bool',
+        );
+        // La clave va en las opciones, como en los demás métodos.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $payments->simulateTransfer($id, ['api_key' => Fixtures::SANDBOX_KEY]),
+            'testHelpers->payments->simulateTransfer no acepta api_key entre los parámetros: va '
+                . 'en las opciones',
+        );
+        // El id, como en payments->retrieve().
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $payments->simulateTransfer(' '),
+            'paymentId no puede estar vacío.',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $payments->simulateTransfer('..'),
+            'paymentId no puede ser "." ni "..".',
+        );
+        // La clave pública no sirve: es para Raya.js.
+        self::assertThrows(
+            AuthenticationException::class,
+            static fn() => $payments->simulateTransfer(
+                $id,
+                [],
+                ['api_key' => 'raya_pk_test_' . str_repeat('a', 48)],
+            ),
+            errorCode: 'API_KEY_PUBLISHABLE_NOT_ALLOWED',
+        );
+        self::assertSame([], $this->api->requests);
     }
 
     public function testErrorsComeWithTheRequestId(): void
@@ -1009,32 +2175,111 @@ final class EndpointsTest extends TestCase
             'users->retrieve recibe 2 argumentos (userId y options), no 3: las opciones van en el '
                 . "segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->create' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->create(
                 ['items' => [self::ITEM]],
                 [],
                 $options,
             ),
-            'checkout->orders->create recibe 2 argumentos (params y options), no 3: las opciones '
+            'connect->orders->create recibe 2 argumentos (params y options), no 3: las opciones '
                 . "van en el segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->retrieve(
                 'c',
                 [],
                 $options,
             ),
-            'checkout->orders->retrieve recibe 2 argumentos (checkoutId y options), no 3: las '
+            'connect->orders->retrieve recibe 2 argumentos (orderId y options), no 3: las '
                 . "opciones van en el segundo, como ['api_key' => …].",
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->refund(
                 'c',
                 [],
                 $options,
             ),
-            'checkout->orders->refund recibe 2 argumentos (checkoutId y options), no 3: las '
+            'connect->orders->refund recibe 2 argumentos (orderId y options), no 3: las '
                 . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'connect->payouts->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->create(
+                $params,
+                $key,
+                $options,
+            ),
+            'connect->payouts->create recibe 2 argumentos (params y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'connect->payouts->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->retrieve(
+                'p',
+                [],
+                $options,
+            ),
+            'connect->payouts->retrieve recibe 2 argumentos (payoutId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'connect->payouts->list' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->list(
+                [],
+                [],
+                $options,
+            ),
+            'connect->payouts->list recibe 2 argumentos (params y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'identity->verifications->create' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->create(
+                ['type' => 'document'],
+                [],
+                $options,
+            ),
+            'identity->verifications->create recibe 2 argumentos (params y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'identity->verifications->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->retrieve(
+                'idv_x',
+                [],
+                $options,
+            ),
+            'identity->verifications->retrieve recibe 2 argumentos (verificationId y options), no '
+                . "3: las opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'identity->verifications->list' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->list(
+                [],
+                [],
+                $options,
+            ),
+            'identity->verifications->list recibe 2 argumentos (params y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'identity->verifications->cancel' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->cancel(
+                'idv_x',
+                [],
+                $options,
+            ),
+            'identity->verifications->cancel recibe 2 argumentos (verificationId y options), no 3: '
+                . "las opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'identity->verifications->files' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->files(
+                'idv_x',
+                [],
+                $options,
+            ),
+            'identity->verifications->files recibe 2 argumentos (verificationId y options), no 3: '
+                . "las opciones van en el segundo, como ['api_key' => …].",
+        ];
+        // El único con tres: el id, los parámetros y las opciones.
+        yield 'testHelpers->payments->simulateTransfer' => [
+            static fn(RayaClient $client): mixed => $client->testHelpers->payments
+                ->simulateTransfer('p', [], [], $options),
+            'testHelpers->payments->simulateTransfer recibe 3 argumentos (paymentId, params y '
+                . "options), no 4: las opciones van en el tercero, como ['api_key' => …].",
         ];
     }
 
@@ -1094,23 +2339,73 @@ final class EndpointsTest extends TestCase
         yield 'users->retrieve' => [
             static fn(RayaClient $client): mixed => $client->users->retrieve('u', $options),
         ];
-        yield 'checkout->orders->create' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->create(
                 ['items' => [self::ITEM]],
                 $options,
             ),
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->retrieve(
                 'c',
                 $options,
             ),
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(RayaClient $client): mixed => $client->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(RayaClient $client): mixed => $client->connect->orders->refund(
                 'c',
                 $options,
             ),
+        ];
+        yield 'connect->payouts->create' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->create(
+                ['amount' => 1, 'destination' => 'x'],
+                // @phpstan-ignore argument.type (una lista, a propósito)
+                $options,
+            ),
+        ];
+        yield 'connect->payouts->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->retrieve(
+                'p',
+                $options,
+            ),
+        ];
+        yield 'connect->payouts->list' => [
+            static fn(RayaClient $client): mixed => $client->connect->payouts->list([], $options),
+        ];
+        yield 'identity->verifications->create' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->create(
+                ['type' => 'document'],
+                $options,
+            ),
+        ];
+        yield 'identity->verifications->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->retrieve(
+                'idv_x',
+                $options,
+            ),
+        ];
+        yield 'identity->verifications->list' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->list(
+                [],
+                $options,
+            ),
+        ];
+        yield 'identity->verifications->cancel' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->cancel(
+                'idv_x',
+                $options,
+            ),
+        ];
+        yield 'identity->verifications->files' => [
+            static fn(RayaClient $client): mixed => $client->identity->verifications->files(
+                'idv_x',
+                $options,
+            ),
+        ];
+        yield 'testHelpers->payments->simulateTransfer' => [
+            static fn(RayaClient $client): mixed => $client->testHelpers->payments
+                ->simulateTransfer('p', [], $options),
         ];
     }
 

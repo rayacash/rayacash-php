@@ -34,6 +34,10 @@ final class Requestor
      * @param bool $authenticated false solo para POST /v1/oauth/token, la única request sin
      *     Authorization: no exige clave y no genera una Idempotency-Key (el servidor no la usa
      *     ahí).
+     * @param bool $idempotent false para un POST con Authorization que no genera una
+     *     Idempotency-Key, porque el servidor no la usa ahí: el test helper del sandbox (simular
+     *     dos veces responde PAYMENT_NOT_PENDING). Quien llama rechaza la idempotency_key de las
+     *     opciones, como oauth->token.
      */
     public function request(
         string $method,
@@ -43,8 +47,17 @@ final class Requestor
         RequestOptions $options,
         ?string $expected = null,
         bool $authenticated = true,
+        bool $idempotent = true,
     ): RayaObject {
-        $prepared = $this->prepare($method, $path, $query, $body, $options, $authenticated);
+        $prepared = $this->prepare(
+            $method,
+            $path,
+            $query,
+            $body,
+            $options,
+            $authenticated,
+            $idempotent,
+        );
         $response = $this->send($prepared);
         return $this->hydrate($prepared, $response, $expected);
     }
@@ -70,20 +83,68 @@ final class Requestor
     ): RayaObject {
         $object = $this->request($method, $path, $query, $body, $options, $class, $authenticated);
         if (!$object instanceof $class) {
-            // Con la respuesta, como todo error de la API: en un POST, la clave permite
-            // reintentar sin ejecutarlo dos veces.
-            $response = $object->getLastResponse();
-            throw new ApiException(
-                'La API respondió algo que no es ' . ObjectTypes::noun($class) . '.',
-                errorCode: 'INVALID_RESPONSE',
-                httpStatus: $response?->httpStatus,
-                requestId: $response?->requestId,
-                httpHeaders: $response?->headers,
-                httpBody: $response?->body,
-                idempotencyKey: $response?->idempotencyKey,
-            );
+            throw self::unexpected($object, ObjectTypes::noun($class));
         }
         return $object;
+    }
+
+    /**
+     * Como requestAs(), para un endpoint que devuelve uno de varios recursos conocidos: el test
+     * helper del sandbox, un Payment o un ConnectOrder según el id. La primera clase es la que se
+     * arma si la respuesta no trae "object"; cualquier otro tipo conocido sale como respuesta
+     * inválida («…no es un pago ni un pago de Connect.»).
+     *
+     * @template T of RayaObject
+     * @param non-empty-list<class-string<T>> $classes
+     * @param array<string, string> $query
+     * @param array<array-key, mixed>|\stdClass|null $body
+     * @return T
+     */
+    public function requestAsOneOf(
+        array $classes,
+        string $method,
+        string $path,
+        RequestOptions $options,
+        array $query = [],
+        array|\stdClass|null $body = null,
+        bool $idempotent = true,
+    ): RayaObject {
+        $object = $this->request(
+            $method,
+            $path,
+            $query,
+            $body,
+            $options,
+            $classes[0],
+            idempotent: $idempotent,
+        );
+        $nouns = [];
+        foreach ($classes as $class) {
+            if ($object instanceof $class) {
+                return $object;
+            }
+            $nouns[] = ObjectTypes::noun($class);
+        }
+        throw self::unexpected($object, \implode(' ni ', $nouns));
+    }
+
+    /**
+     * El error de una respuesta 2xx con otro tipo de objeto que el que el método puede devolver.
+     * Lleva la respuesta, como todo error de la API: en un POST, la clave permite reintentar sin
+     * ejecutarlo dos veces.
+     */
+    private static function unexpected(RayaObject $object, string $noun): ApiException
+    {
+        $response = $object->getLastResponse();
+        return new ApiException(
+            "La API respondió algo que no es {$noun}.",
+            errorCode: 'INVALID_RESPONSE',
+            httpStatus: $response?->httpStatus,
+            requestId: $response?->requestId,
+            httpHeaders: $response?->headers,
+            httpBody: $response?->body,
+            idempotencyKey: $response?->idempotencyKey,
+        );
     }
 
     /**
@@ -116,6 +177,7 @@ final class Requestor
         array|\stdClass|null $body,
         RequestOptions $options,
         bool $authenticated,
+        bool $idempotent,
     ): Prepared {
         $verb = Text::asciiUpper($method);
         if ($verb !== 'GET' && $verb !== 'POST') {
@@ -152,11 +214,12 @@ final class Requestor
         $idempotencyKey = null;
         if ($verb === 'POST') {
             // Una sola clave por llamada, la misma en cada reintento: nunca se ejecuta dos veces.
-            // Sin autenticación (oauth->token) no se genera: el servidor no la usa ahí.
+            // Sin autenticación (oauth->token) o con idempotent en false (el test helper del
+            // sandbox) no se genera: el servidor no la usa ahí.
             $given = $options->get('idempotency_key');
             if ($given !== null) {
                 $idempotencyKey = Encoding::idempotencyKey($given);
-            } elseif ($authenticated) {
+            } elseif ($authenticated && $idempotent) {
                 $idempotencyKey = Uuid::v4();
             }
             if ($idempotencyKey !== null) {

@@ -6,13 +6,16 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\AuthenticationException;
 use RayaCash\Exception\InvalidRequestException;
 use RayaCash\Exception\RayaException;
 use RayaCash\Exception\SignatureVerificationException;
+use RayaCash\IdentityVerification;
+use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -32,6 +35,10 @@ final class ReadmeTest extends TestCase
     /** El cliente falso del único bloque que corre (como `fetch: fakeFetch` en Node). */
     private const OFFLINE_MARKER = '$fakeHttpClient';
 
+    /** Identity.js con un <script>, desde el CDN de Raya: v1 es siempre la última 1.x. */
+    private const IDENTITY_JS_SCRIPT = '<script src="https://cdn.raya.cash/identity/v1/'
+        . 'identity.js"></script>';
+
     /**
      * Qué es cada variable en los bloques del README y en examples/: así se comprueba que los
      * métodos y los campos que usan existen ($e es cualquier excepción del SDK y $object, el
@@ -46,8 +53,11 @@ final class ReadmeTest extends TestCase
         'deposit' => [Transfer::class],
         'token' => [OAuthToken::class],
         'user' => [User::class],
-        'checkout' => [Checkout::class],
-        'object' => [Payment::class, Transfer::class, Checkout::class],
+        'connectOrder' => [ConnectOrder::class],
+        'connectPayout' => [ConnectPayout::class],
+        'verification' => [IdentityVerification::class],
+        'files' => [IdentityVerificationFiles::class],
+        'object' => [Payment::class, Transfer::class, ConnectOrder::class],
         'page' => [ListObject::class],
         'event' => [Event::class],
         'e' => [
@@ -73,6 +83,7 @@ final class ReadmeTest extends TestCase
         'start',
         'today',
         'account',
+        'customer',
     ];
 
     public function testTheReadmeHasPhpExamples(): void
@@ -152,6 +163,88 @@ final class ReadmeTest extends TestCase
             self::assertStringNotContainsString('whe_', (string) file_get_contents($file), $file);
         }
         self::assertStringNotContainsString('whe_', self::readme());
+    }
+
+    public function testIdentityJsLoadsWithNpmOrTheRayaCdn(): void
+    {
+        // Identity.js con npm (primero) o con el <script> del CDN de Raya, y la CSP de cada
+        // forma; nunca un CDN de terceros ni una copia en los estáticos del sitio. Del CDN, solo
+        // el origen (en la CSP), v1 o una versión fija.
+        $readme = self::readme();
+        $start = strpos($readme, "\n## Identidad\n");
+        self::assertNotFalse($start);
+        $end = strpos($readme, "\n## ", $start + 1);
+        $section = substr($readme, $start, $end === false ? null : $end - $start);
+        $npm = strpos($section, 'npm install rayacash-identity');
+        $script = strpos($section, self::IDENTITY_JS_SCRIPT);
+        self::assertNotFalse($npm);
+        self::assertNotFalse($script);
+        self::assertLessThan($script, $npm, 'npm va antes que el <script> del CDN');
+        self::assertStringContainsString('`frame-src https://raya.cash`', $section);
+        self::assertStringContainsString('`https://cdn.raya.cash` a `script-src`', $section);
+        preg_match_all('~https?://js\.raya\.cash[^\s"\'`)<>]*~', $readme, $urls);
+        foreach ($urls[0] as $url) {
+            self::assertMatchesRegularExpression(
+                '~\Ahttps://js\.raya\.cash(/identity/v(1|\d+\.\d+\.\d+)/identity\.js)?\z~',
+                $url,
+            );
+        }
+        self::assertDoesNotMatchRegularExpression(
+            '~unpkg|jsdelivr|esm\.sh|skypack|cdnjs~i',
+            $readme,
+        );
+        self::assertDoesNotMatchRegularExpression(
+            '~archivos estáticos|tus estáticos|node_modules/rayacash-identity/dist~u',
+            $readme,
+        );
+    }
+
+    public function testTheSandboxSectionIsConditionedAndSaysWhatTripsPeopleUp(): void
+    {
+        // El README termina en las guías para IA: «Sandbox» va condicionada a que la cuenta lo
+        // tenga, y la línea de Identidad de «Antes de empezar» manda a esa sección.
+        $readme = self::readme();
+        $start = strpos($readme, "\n## Sandbox\n");
+        $end = strpos($readme, "\n## Tests de tu integración\n");
+        self::assertNotFalse($start);
+        self::assertNotFalse($end);
+        $sandbox = substr($readme, $start, $end - $start);
+        foreach (
+            [
+                'Si en el menú de tu perfil del dashboard aparece «Crear sandbox» o «Sandboxes»',
+                'Si no aparece, tu cuenta todavía no lo tiene.',
+                // Un evento sale solo hacia los destinos que ya existían cuando ocurrió.
+                'antes de simular',
+                'después de crearlo',
+                // Al pasar a la cuenta real cambian la clave y el secreto del destino.
+                '`RAYA_WEBHOOK_SECRET`',
+                // Una orden simulada se consulta con el access_token, no con la clave secreta.
+                '$connected->connect->orders->retrieve()',
+            ] as $text
+        ) {
+            self::assertStringContainsString($text, $sandbox);
+        }
+        self::assertMatchesRegularExpression(
+            '/^7\. \*\*Para verificar la identidad.*disponible en el \[sandbox\]\(#sandbox\):/mu',
+            $readme,
+        );
+    }
+
+    public function testTheSourcesDoNotNameOtherProviders(): void
+    {
+        // Los docblocks salen con el paquete (tu IDE los muestra). El nombre va armado, así el
+        // grep del repo sigue limpio.
+        $competitor = 'str' . 'ipe';
+        $files = self::sourceFiles(dirname(__DIR__) . '/src');
+        self::assertNotEmpty($files);
+        foreach ($files as $file) {
+            self::assertStringNotContainsStringIgnoringCase(
+                $competitor,
+                (string) file_get_contents($file),
+                $file,
+            );
+        }
+        self::assertStringNotContainsStringIgnoringCase($competitor, self::readme());
     }
 
     /** @return iterable<string, array{string}> */

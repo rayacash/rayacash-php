@@ -4,14 +4,19 @@ declare(strict_types=1);
 
 namespace RayaCash\Checkout;
 
-use RayaCash\RayaObject;
+use RayaCash\ConnectOrder;
+use RayaCash\Internal\Deprecation;
 
-/**
- * Quién transfirió, con los datos que informa su entidad.
- *
- * @property-read string|null $name
- * @property-read string|null $tax_id
- * @property-read string|null $account CBU o CVU de origen: si reembolsás el checkout, la plata
- *     vuelve acá.
- */
-final class Payer extends RayaObject {}
+// El nombre de ConnectOrder\Payer en la 1.1.0: un alias deprecado de la misma clase, hasta la
+// 2.0.0 (ver Internal\Deprecation).
+Deprecation::alias(Payer::class, ConnectOrder\Payer::class);
+
+if (\false) {
+    /**
+     * Nunca se declara: el nombre es un alias de ConnectOrder\Payer.
+     *
+     * @deprecated Desde la 1.2.0: usá ConnectOrder\Payer, que es la misma clase. Se elimina en
+     *     la 2.0.0.
+     */
+    final class Payer extends ConnectOrder\Payer {}
+}

@@ -30,7 +30,10 @@ use RayaCash\Tests\Support\TestCase;
  */
 final class ErrorsTest extends TestCase
 {
-    /** Los 43 códigos del contrato (api.md › Códigos de error). */
+    /**
+     * Los 51 códigos del contrato (api.md › Códigos de error), con los de Identidad
+     * (IDENTITY_NOT_ACTIVATED al final de los 403) y los del sandbox.
+     */
     private const CATALOG = [
         ['INVALID_JSON', 400, InvalidRequestException::class],
         ['PARAMETER_MISSING', 400, InvalidRequestException::class],
@@ -53,15 +56,23 @@ final class ErrorsTest extends TestCase
         ['CONNECTED_ACCOUNT_LOCKED', 403, PermissionDeniedException::class],
         ['CONNECTED_ACCOUNT_NOT_CONFIGURED', 403, PermissionDeniedException::class],
         ['APP_DISABLED', 403, PermissionDeniedException::class],
+        ['PAYOUT_ORIGIN_UNAVAILABLE', 403, PermissionDeniedException::class],
+        ['SANDBOX_NOT_SUPPORTED', 403, PermissionDeniedException::class],
+        ['SANDBOX_ONLY', 403, PermissionDeniedException::class],
+        ['IDENTITY_NOT_ACTIVATED', 403, PermissionDeniedException::class],
         ['TRANSFER_NOT_FOUND', 404, NotFoundException::class],
         ['PAYMENT_NOT_FOUND', 404, NotFoundException::class],
         ['USER_NOT_FOUND', 404, NotFoundException::class],
-        ['CHECKOUT_NOT_FOUND', 404, NotFoundException::class],
+        ['ORDER_NOT_FOUND', 404, NotFoundException::class],
         ['NOT_FOUND', 404, NotFoundException::class],
+        ['PAYOUT_NOT_FOUND', 404, NotFoundException::class],
+        ['VERIFICATION_NOT_FOUND', 404, NotFoundException::class],
         ['METHOD_NOT_ALLOWED', 405, InvalidRequestException::class],
         ['IDEMPOTENCY_KEY_REUSED', 409, IdempotencyException::class],
         ['IDEMPOTENCY_KEY_IN_USE', 409, IdempotencyException::class],
         ['PAYMENT_NOT_REFUNDABLE', 409, ConflictException::class],
+        ['PAYMENT_NOT_PENDING', 409, ConflictException::class],
+        ['VERIFICATION_NOT_CANCELABLE', 409, ConflictException::class],
         ['REQUEST_TOO_LARGE', 413, InvalidRequestException::class],
         ['INSUFFICIENT_BALANCE', 422, UnprocessableEntityException::class],
         ['LIMIT_EXCEEDED', 422, UnprocessableEntityException::class],
@@ -79,9 +90,9 @@ final class ErrorsTest extends TestCase
 
     private const PARAMETER_INVALID = 'amount tiene que ser un número con hasta 2 decimales.';
 
-    public function testCatalogHasThe43Codes(): void
+    public function testCatalogHasThe51Codes(): void
     {
-        self::assertCount(43, array_unique(array_column(self::CATALOG, 0)));
+        self::assertCount(51, array_unique(array_column(self::CATALOG, 0)));
     }
 
     /** @return iterable<string, array{string, int, class-string<RayaException>}> */
@@ -213,6 +224,31 @@ final class ErrorsTest extends TestCase
         ]);
         self::assertSame(ConflictException::class, $without::class);
         self::assertSame(['status' => 'refunded'], $without->getData());
+    }
+
+    /** Identidad: el estado de la verificación que ya no se puede cancelar, en getData(). */
+    public function testVerificationNotCancelableCarriesTheStatus(): void
+    {
+        $error = self::makeError(409, [
+            'error' => [
+                'code' => 'VERIFICATION_NOT_CANCELABLE',
+                'message' => 'Solo podés cancelar verificaciones pending o in_progress.',
+                'data' => ['status' => 'processing'],
+            ],
+        ]);
+        self::assertSame(ConflictException::class, $error::class);
+        self::assertSame('VERIFICATION_NOT_CANCELABLE', $error->getErrorCode());
+        self::assertSame(['status' => 'processing'], $error->getData());
+    }
+
+    /** El tope de verificaciones de Identidad: RATE_LIMITED con data.limit y Retry-After. */
+    public function testTheVerificationLimitCarriesItsLimitAndRetryAfter(): void
+    {
+        $body = ['code' => 'RATE_LIMITED', 'message' => 'x', 'data' => ['limit' => 'open']];
+        $error = self::makeError(429, ['error' => $body], ['Retry-After' => '3600']);
+        self::assertSame(RateLimitException::class, $error::class);
+        self::assertSame(3600.0, $error->getRetryAfter());
+        self::assertSame(['limit' => 'open'], $error->getData());
     }
 
     /** @return iterable<string, array{int, string, class-string<RayaException>}> */

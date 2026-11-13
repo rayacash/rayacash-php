@@ -22,6 +22,8 @@ declare(strict_types=1);
 namespace RayaCash\Tests\Types\Data;
 
 use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
+use RayaCash\IdentityVerification;
 use RayaCash\Payment;
 use RayaCash\RayaClient;
 use RayaCash\Webhook;
@@ -87,15 +89,75 @@ function expectErrors(RayaClient $client, Payment $payment, ?string $header, str
 
     // items es una lista de ítems, no un solo ítem.
     // error: argument.type: Parameter #1 $params
-    $client->checkout->orders->create(['items' => ['title' => 'x', 'quantity' => 1]]);
+    $client->connect->orders->create(['items' => ['title' => 'x', 'quantity' => 1]]);
 
     // fee es un monto, no un bool.
     // error: argument.type: Parameter #1 $params
+    $client->connect->orders->create(['items' => [], 'fee' => true]);
+
+    // Por id, con el estilo global, es ConnectOrder::refundById(): refund() es del pago que ya
+    // tenés.
+    // error: method.staticCall: Static call to instance method RayaCash\ConnectOrder::refund()
+    // error: argument.type: Parameter #1 $options
+    ConnectOrder::refund('id');
+
+    // La idempotency_key también es obligatoria en connect->payouts->create (como en transfers):
+    // sin las opciones…
+    // error: arguments.count: ConnectPayoutService::create() invoked with 1 parameter
+    $client->connect->payouts->create(['amount' => 1, 'destination' => 'x']);
+
+    // …o con las opciones, pero sin la clave.
+    // error: argument.type: Parameter #2 $options
+    $client->connect->payouts->create(['amount' => 1, 'destination' => 'x'], []);
+
+    // destination va como string: un CBU como número pierde los ceros de adelante.
+    // error: argument.type: Parameter #1 $params
+    $client->connect->payouts->create(['amount' => 1, 'destination' => 123], $key);
+
+    // Los filtros de la lista son los de la API: status es uno de los estados de un payout.
+    // error: argument.type: Parameter #1 $params
+    $client->connect->payouts->list(['status' => 'succeeded']);
+
+    // Identidad: type es obligatorio en identity->verifications->create…
+    // error: argument.type: Parameter #1 $params
+    $client->identity->verifications->create([]);
+
+    // …y es document o biometric.
+    // error: argument.type: Parameter #1 $params
+    $client->identity->verifications->create(['type' => 'selfie']);
+
+    // La metadata de una verificación también es de string a string.
+    // error: argument.type: Parameter #1 $params
+    $client->identity->verifications->create(['type' => 'document', 'metadata' => ['plan' => 1]]);
+
+    // Los filtros de la lista son los de la API: open no es un estado de la lista pública…
+    // error: argument.type: Parameter #1 $params
+    $client->identity->verifications->list(['status' => 'open']);
+
+    // …y limit es un número.
+    // error: argument.type: Parameter #1 $params
+    $client->identity->verifications->list(['limit' => '10']);
+
+    // Por id, con el estilo global, es IdentityVerification::cancelById(): cancel() es de la
+    // verificación que ya tenés.
+    // error: method.staticCall: RayaCash\IdentityVerification::cancel()
+    // error: argument.type: Parameter #1 $options
+    IdentityVerification::cancel('id');
+
+    // El test helper del sandbox: amount es un monto, no un bool…
+    // error: argument.type: Parameter #2 $params
+    $client->testHelpers->payments->simulateTransfer('id', ['amount' => true]);
+
+    // …y el id es un string.
+    // error: argument.type: Parameter #1 $paymentId
+    Payment::simulateTransfer(1042);
+
+    // Los nombres de la 1.1.0 (alias deprecados) piden lo mismo que los nuevos: fee es un monto…
+    // error: argument.type: Parameter #1 $params
     $client->checkout->orders->create(['items' => [], 'fee' => true]);
 
-    // Por id, con el estilo global, es Checkout::refundById(): refund() es del checkout que ya
-    // tenés.
-    // error: method.staticCall: Static call to instance method RayaCash\Checkout::refund()
-    // error: argument.type: Parameter #1 $options
-    Checkout::refund('id');
+    // …y el id se llama $orderId, como en PHP: checkoutId (el de la 1.1.0) no tiene alias.
+    // error: argument.missing: Missing parameter $orderId
+    // error: argument.unknown: Unknown parameter $checkoutId
+    Checkout::retrieve(checkoutId: 'id');
 }

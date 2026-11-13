@@ -25,6 +25,16 @@ use RayaCash\Tests\Support\TestCase;
  */
 final class InternalsTest extends TestCase
 {
+    /**
+     * Las versiones publicadas en Packagist, con el sha256 de su sección del CHANGELOG: una
+     * versión publicada no se vuelve a publicar ni se reescribe su sección (lo que falta va en la
+     * siguiente). Al publicar una, sumala acá.
+     */
+    private const PUBLISHED = [
+        '1.1.0' => '60e0dc816b3dcd37ef3f447437590a31d9d19d288a5aa2c45d2559564bd1e97d',
+        '1.0.0' => 'a918899e3f0f7e4041aae960f7474796fdeb8f985f7cc0d12b096e98ad68f2e8',
+    ];
+
     public function testRealSleepAndJitter(): void
     {
         // Los de verdad: setUp() los cambió por los de prueba. Duerme 1 ms de verdad.
@@ -156,6 +166,55 @@ final class InternalsTest extends TestCase
             ),
             $this->api->last()->header('user-agent'),
         );
+    }
+
+    /**
+     * La versión es la misma en RayaCash::VERSION, la primera sección del CHANGELOG y la línea
+     * «Versión» del README: lo que comprueba scripts/check-version.php en el CI.
+     */
+    public function testTheChangelogAndTheReadmeSayTheVersion(): void
+    {
+        [$status, $output] = self::php([dirname(__DIR__) . '/scripts/check-version.php']);
+        self::assertSame(0, $status, $output);
+        $version = RayaCash::VERSION;
+        self::assertStringContainsString(
+            "Versión {$version}: el release es v{$version}, sobre este commit.",
+            $output,
+        );
+        self::assertSame($version, array_key_first(self::changelogSections()));
+    }
+
+    /**
+     * La versión es nueva (una publicada no se vuelve a publicar) y las secciones del CHANGELOG
+     * de las publicadas siguen como salieron, byte por byte.
+     */
+    public function testPublishedVersionsAreNeverRewritten(): void
+    {
+        foreach (array_keys(self::PUBLISHED) as $version) {
+            self::assertTrue(
+                version_compare(RayaCash::VERSION, $version, '>'),
+                'RayaCash::VERSION (' . RayaCash::VERSION . ') tiene que ser más nueva que la '
+                    . "{$version}, que ya se publicó.",
+            );
+        }
+        $sections = self::changelogSections();
+        $published = array_slice($sections, 1, null, true);
+        foreach (array_keys($published) as $version) {
+            self::assertArrayHasKey(
+                $version,
+                self::PUBLISHED,
+                "La {$version} ya salió (está debajo de la primera sección del CHANGELOG): sumá el "
+                    . 'sha256 de su sección a PUBLISHED.',
+            );
+        }
+        foreach (self::PUBLISHED as $version => $sha256) {
+            self::assertSame(
+                $sha256,
+                hash('sha256', $published[$version] ?? ''),
+                "La sección {$version} del CHANGELOG cambió, y esa versión ya se publicó: lo nuevo "
+                    . 'va en la sección de la próxima.',
+            );
+        }
     }
 
     /**
@@ -291,5 +350,24 @@ final class InternalsTest extends TestCase
     {
         $autoload = var_export(dirname(__DIR__) . '/vendor/autoload.php', true);
         return str_replace('require AUTOLOAD;', "require {$autoload};", $code);
+    }
+
+    /**
+     * Las secciones del CHANGELOG, en orden, por versión: cada una desde su «## X.Y.Z» hasta la
+     * próxima (con la línea en blanco de antes) o el final.
+     *
+     * @return array<string, string>
+     */
+    private static function changelogSections(): array
+    {
+        $changelog = (string) file_get_contents(dirname(__DIR__) . '/CHANGELOG.md');
+        $sections = [];
+        foreach (preg_split('/^(?=## )/m', $changelog) ?: [] as $chunk) {
+            if (preg_match('/\A## (\S+)\n/', $chunk, $heading) === 1) {
+                $sections[$heading[1]] = $chunk;
+            }
+        }
+        self::assertNotSame([], $sections, 'El CHANGELOG no tiene secciones «## X.Y.Z».');
+        return $sections;
     }
 }

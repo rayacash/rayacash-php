@@ -11,12 +11,21 @@ parameters:
         - examples
         - scripts
     excludePaths:
-        # Los lee tests/Types/TypesTest.php (TypeInferenceTestCase), no el análisis común.
-        - tests/Types/data/*
-        # Usan Laravel y Symfony, que no están instalados (como los webhooks de Python fuera de
-        # mypy). Siguen pasando php -l en ReadmeTest.
-        - examples/webhook-laravel.php (?)
-        - examples/webhook-symfony.php (?)
+        analyse:
+            # Los nombres de la 1.1.0, alias deprecados (ver src/Internal/Deprecation.php). Su
+            # declaración del if (\false) se escanea, como en el proyecto de quien usa el SDK,
+            # pero no se analiza: extiende una clase final, un error que no se puede ignorar.
+            - src/Checkout.php
+            - src/Checkout/*
+            - src/Service/CheckoutOrderService.php
+            - src/Service/CheckoutService.php
+        analyseAndScan:
+            # Los lee tests/Types/TypesTest.php (TypeInferenceTestCase), no el análisis común.
+            - tests/Types/data/*
+            # Usan Laravel y Symfony, que no están instalados (como los webhooks de Python fuera
+            # de mypy). Siguen pasando php -l en ReadmeTest.
+            - examples/webhook-laravel.php (?)
+            - examples/webhook-symfony.php (?)
     tmpDir: build/phpstan
     # Una librería no puede confiar en sus phpdoc: quien la usa puede pasar cualquier cosa.
     treatPhpDocTypesAsCertain: false

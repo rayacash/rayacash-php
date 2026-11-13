@@ -1,6 +1,6 @@
 {
     "name": "rayacash/rayacash-php",
-    "description": "SDK oficial de PHP para la API de Raya Cash: pagos por transferencia, transferencias, balance, webhooks y checkouts de apps a nombre de cuentas conectadas.",
+    "description": "SDK oficial de PHP para la API de Raya Cash: pagos por transferencia, transferencias, balance, webhooks y Raya Connect (pagos de apps a nombre de cuentas conectadas).",
     "type": "library",
     "keywords": [
         "raya",
@@ -13,7 +13,7 @@
         "api",
         "sdk",
         "oauth",
-        "checkout",
+        "connect",
         "marketplace"
     ],
     "homepage": "https://raya.cash/api",
@@ -49,7 +49,10 @@
     "autoload": {
         "psr-4": {
             "RayaCash\\": "src/"
-        }
+        },
+        "files": [
+            "src/aliases.php"
+        ]
     },
     "autoload-dev": {
         "psr-4": {

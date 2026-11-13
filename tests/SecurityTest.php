@@ -6,7 +6,8 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
-use RayaCash\Checkout;
+use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
@@ -20,6 +21,7 @@ use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\Exception\UnprocessableEntityException;
 use RayaCash\HttpClient\CurlClient;
 use RayaCash\HttpClient\TransportException;
+use RayaCash\IdentityVerification;
 use RayaCash\Internal\GlobalState;
 use RayaCash\Internal\Secret;
 use RayaCash\ListObject;
@@ -146,15 +148,17 @@ final class SecurityTest extends TestCase
         $connected = new RayaClient(Fixtures::ACCESS_TOKEN, ['http_client' => $this->api]);
         $this->api->add(200, Fixtures::USER);
         $user = $connected->users->retrieve('me');
-        $this->api->add(201, Fixtures::CHECKOUT_PENDING);
-        $checkout = $connected->checkout->orders->create(['items' => [self::ITEM], 'fee' => 500]);
+        $this->api->add(201, Fixtures::CONNECT_ORDER_PENDING);
+        $connectOrder = $connected->connect->orders->create(
+            ['items' => [self::ITEM], 'fee' => 500],
+        );
         self::assertSame('Bearer ' . Fixtures::ACCESS_TOKEN, $this->authorization());
 
         $shown = self::dumps('connected', $connected)
             + self::dumps('user', $user)
-            + self::dumps('checkout', $checkout)
+            + self::dumps('connectOrder', $connectOrder)
             + self::dumps('request', $this->api->last()->request)
-            + self::dumps('response', $checkout->getLastResponse());
+            + self::dumps('response', $connectOrder->getLastResponse());
         self::assertNoSecrets($shown);
         self::assertStringContainsString('raya_at_live_…9hJk', $shown['connected: print_r']);
         self::assertStringContainsString('Bearer raya_at_live_…9hJk', $shown['request: print_r']);
@@ -480,19 +484,46 @@ final class SecurityTest extends TestCase
             'Payment::create' => static fn(): mixed => Payment::create(['amount' => 1], $other),
             'Payment::retrieve' => static fn(): mixed => Payment::retrieve('p', $other),
             'Payment::refundById' => static fn(): mixed => Payment::refundById('p', $other),
+            'Payment::simulateTransfer' => static fn(): mixed => Payment::simulateTransfer(
+                'p',
+                [],
+                $other,
+            ),
             '$payment->refund' => static fn(): mixed => Payment::constructFrom(
                 ['object' => 'payment', 'id' => 'p'],
             )->refund($other),
             'User::retrieve' => static fn(): mixed => User::retrieve('u', $other),
-            'Checkout::create' => static fn(): mixed => Checkout::create(
+            'ConnectOrder::create' => static fn(): mixed => ConnectOrder::create(
                 ['items' => [self::ITEM]],
                 $other,
             ),
-            'Checkout::retrieve' => static fn(): mixed => Checkout::retrieve('c', $other),
-            'Checkout::refundById' => static fn(): mixed => Checkout::refundById('c', $other),
-            '$checkout->refund' => static fn(): mixed => Checkout::constructFrom(
-                ['object' => 'checkout', 'id' => 'c'],
+            'ConnectOrder::retrieve' => static fn(): mixed => ConnectOrder::retrieve('c', $other),
+            'ConnectOrder::refundById' => static fn(): mixed => ConnectOrder::refundById(
+                'c',
+                $other,
+            ),
+            '$connectOrder->refund' => static fn(): mixed => ConnectOrder::constructFrom(
+                ['object' => 'connect.order', 'id' => 'c'],
             )->refund($other),
+            'ConnectPayout::create' => static fn(): mixed => ConnectPayout::create(
+                ['amount' => 1, 'destination' => 'ana.ejemplo'],
+                ['idempotency_key' => 'k', ...$other],
+            ),
+            'ConnectPayout::retrieve' => static fn(): mixed => ConnectPayout::retrieve('p', $other),
+            'ConnectPayout::list' => static fn(): mixed => ConnectPayout::list([], $other),
+            'IdentityVerification::create' => static fn(): mixed
+                => IdentityVerification::create(['type' => 'document'], $other),
+            'IdentityVerification::retrieve' => static fn(): mixed
+                => IdentityVerification::retrieve('idv_x', $other),
+            'IdentityVerification::list' => static fn(): mixed
+                => IdentityVerification::list([], $other),
+            'IdentityVerification::cancelById' => static fn(): mixed
+                => IdentityVerification::cancelById('idv_x', $other),
+            'IdentityVerification::files' => static fn(): mixed
+                => IdentityVerification::files('idv_x', $other),
+            '$verification->cancel' => static fn(): mixed => IdentityVerification::constructFrom(
+                ['object' => 'identity.verification', 'id' => 'idv_x'],
+            )->cancel($other),
         ];
         foreach ($global as $name => $call) {
             yield "ApiException de {$name} con una clave por llamada" => [
@@ -506,6 +537,30 @@ final class SecurityTest extends TestCase
                 true,
             ];
         }
+        // El test helper del sandbox, con la clave por llamada: sus opciones son sensibles. Y su
+        // idempotency_key, que no acepta, sale antes de mandar nada, también con la clave al lado.
+        yield 'ApiException de testHelpers->payments->simulateTransfer con una clave' => [
+            ApiException::class,
+            static function (MockApi $api): mixed {
+                $api->addError(503, 'API_UNAVAILABLE');
+                return $api->client()->testHelpers->payments->simulateTransfer(
+                    'p',
+                    ['amount' => 1500],
+                    ['api_key' => Fixtures::OTHER_KEY],
+                );
+            },
+            true,
+        ];
+        yield 'TypeError: idempotency_key en testHelpers->payments->simulateTransfer' => [
+            \TypeError::class,
+            static fn(MockApi $api): mixed => $api->client()->testHelpers->payments
+                ->simulateTransfer(
+                    'p',
+                    [],
+                    ['api_key' => Fixtures::OTHER_KEY, 'idempotency_key' => 'k'],
+                ),
+            true,
+        ];
         // oauth->token no acepta api_key (no lleva Authorization): el error sale antes de mandar
         // nada, con las opciones (y los parámetros, que llevan el client_secret) sensibles.
         yield 'TypeError: api_key en oauth->token' => [
@@ -882,32 +937,59 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             'users->retrieve recibe 2 argumentos (userId y options), no 3',
         ];
-        yield 'checkout->orders->create' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+        yield 'connect->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->create(
                 ['items' => [self::ITEM]],
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->create recibe 2 argumentos (params y options), no 3',
+            'connect->orders->create recibe 2 argumentos (params y options), no 3',
         ];
-        yield 'checkout->orders->retrieve' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->retrieve(
+        yield 'connect->orders->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->retrieve(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->retrieve recibe 2 argumentos (checkoutId y options), no 3',
+            'connect->orders->retrieve recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield 'checkout->orders->refund' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->refund(
+        yield 'connect->orders->refund' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->refund(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'checkout->orders->refund recibe 2 argumentos (checkoutId y options), no 3',
+            'connect->orders->refund recibe 2 argumentos (orderId y options), no 3',
+        ];
+        yield 'connect->payouts->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->payouts->create(
+                ['amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'connect->payouts->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'connect->payouts->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->payouts->retrieve(
+                'p',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'connect->payouts->retrieve recibe 2 argumentos (payoutId y options), no 3',
+        ];
+        yield 'connect->payouts->list' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->payouts->list(
+                [],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'connect->payouts->list recibe 2 argumentos (params y options), no 3',
         ];
         yield 'OAuth::token' => [
             static fn(MockApi $api): mixed => OAuth::token(
@@ -927,39 +1009,180 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             'User::retrieve recibe 2 argumentos (userId y options), no 3',
         ];
-        yield 'Checkout::create' => [
-            static fn(MockApi $api): mixed => Checkout::create(
+        yield 'ConnectOrder::create' => [
+            static fn(MockApi $api): mixed => ConnectOrder::create(
                 ['items' => [self::ITEM]],
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::create recibe 2 argumentos (params y options), no 3',
+            'ConnectOrder::create recibe 2 argumentos (params y options), no 3',
         ];
-        yield 'Checkout::retrieve' => [
-            static fn(MockApi $api): mixed => Checkout::retrieve(
+        yield 'ConnectOrder::retrieve' => [
+            static fn(MockApi $api): mixed => ConnectOrder::retrieve(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::retrieve recibe 2 argumentos (checkoutId y options), no 3',
+            'ConnectOrder::retrieve recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield 'Checkout::refundById' => [
-            static fn(MockApi $api): mixed => Checkout::refundById(
+        yield 'ConnectOrder::refundById' => [
+            static fn(MockApi $api): mixed => ConnectOrder::refundById(
                 'c',
                 [],
                 ['api_key' => Fixtures::OTHER_KEY],
             ),
             \ArgumentCountError::class,
-            'Checkout::refundById recibe 2 argumentos (checkoutId y options), no 3',
+            'ConnectOrder::refundById recibe 2 argumentos (orderId y options), no 3',
         ];
-        yield '$checkout->refund' => [
-            static fn(MockApi $api): mixed => Checkout::constructFrom(
-                ['object' => 'checkout', 'id' => 'c'],
+        yield '$connectOrder->refund' => [
+            static fn(MockApi $api): mixed => ConnectOrder::constructFrom(
+                ['object' => 'connect.order', 'id' => 'c'],
             )->refund([], ['api_key' => Fixtures::OTHER_KEY]),
             \ArgumentCountError::class,
-            '$checkout->refund recibe 1 argumento (options), no 2',
+            '$connectOrder->refund recibe 1 argumento (options), no 2',
+        ];
+        yield 'ConnectPayout::create' => [
+            static fn(MockApi $api): mixed => ConnectPayout::create(
+                ['amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'ConnectPayout::create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'ConnectPayout::retrieve' => [
+            static fn(MockApi $api): mixed => ConnectPayout::retrieve(
+                'p',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'ConnectPayout::retrieve recibe 2 argumentos (payoutId y options), no 3',
+        ];
+        yield 'ConnectPayout::list' => [
+            static fn(MockApi $api): mixed => ConnectPayout::list(
+                [],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'ConnectPayout::list recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'identity->verifications->create' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->create(
+                ['type' => 'document'],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'identity->verifications->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'identity->verifications->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->retrieve(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'identity->verifications->retrieve recibe 2 argumentos (verificationId y options)',
+        ];
+        yield 'identity->verifications->list' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->list(
+                [],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'identity->verifications->list recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'identity->verifications->cancel' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->cancel(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'identity->verifications->cancel recibe 2 argumentos (verificationId y options)',
+        ];
+        yield 'identity->verifications->files' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->files(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'identity->verifications->files recibe 2 argumentos (verificationId y options)',
+        ];
+        yield 'IdentityVerification::create' => [
+            static fn(MockApi $api): mixed => IdentityVerification::create(
+                ['type' => 'document'],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'IdentityVerification::create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'IdentityVerification::retrieve' => [
+            static fn(MockApi $api): mixed => IdentityVerification::retrieve(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'IdentityVerification::retrieve recibe 2 argumentos (verificationId y options), no 3',
+        ];
+        yield 'IdentityVerification::list' => [
+            static fn(MockApi $api): mixed => IdentityVerification::list(
+                [],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'IdentityVerification::list recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'IdentityVerification::cancelById' => [
+            static fn(MockApi $api): mixed => IdentityVerification::cancelById(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'IdentityVerification::cancelById recibe 2 argumentos (verificationId y options)',
+        ];
+        yield 'IdentityVerification::files' => [
+            static fn(MockApi $api): mixed => IdentityVerification::files(
+                'idv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'IdentityVerification::files recibe 2 argumentos (verificationId y options), no 3',
+        ];
+        yield '$verification->cancel' => [
+            static fn(MockApi $api): mixed => IdentityVerification::constructFrom(
+                ['object' => 'identity.verification', 'id' => 'idv_x'],
+            )->cancel([], ['api_key' => Fixtures::OTHER_KEY]),
+            \ArgumentCountError::class,
+            '$verification->cancel recibe 1 argumento (options), no 2',
+        ];
+        yield 'testHelpers->payments->simulateTransfer' => [
+            static fn(MockApi $api): mixed => $api->client()->testHelpers->payments
+                ->simulateTransfer('p', [], [], ['api_key' => Fixtures::OTHER_KEY]),
+            \ArgumentCountError::class,
+            'testHelpers->payments->simulateTransfer recibe 3 argumentos (paymentId, params y '
+                . 'options), no 4',
+        ];
+        yield 'Payment::simulateTransfer' => [
+            static fn(MockApi $api): mixed => Payment::simulateTransfer(
+                'p',
+                [],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'Payment::simulateTransfer recibe 3 argumentos (paymentId, params y options), no 4',
         ];
 
         // Una opción entre los parámetros: el SDK la rechaza («va en las opciones»).
@@ -997,12 +1220,36 @@ final class SecurityTest extends TestCase
             \TypeError::class,
             'transfers->list no acepta apiKey entre los parámetros: va en las opciones',
         ];
-        yield 'api_key entre los parámetros de checkout->orders->create' => [
-            static fn(MockApi $api): mixed => $api->client()->checkout->orders->create(
+        yield 'api_key entre los parámetros de connect->orders->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->orders->create(
                 ['items' => [self::ITEM], 'api_key' => Fixtures::OTHER_KEY],
             ),
             \TypeError::class,
-            'checkout->orders->create no acepta api_key entre los parámetros: va en las opciones',
+            'connect->orders->create no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los parámetros de connect->payouts->create' => [
+            static fn(MockApi $api): mixed => $api->client()->connect->payouts->create(
+                ['amount' => 1, 'destination' => 'x', 'api_key' => Fixtures::OTHER_KEY],
+                ['idempotency_key' => 'k'],
+            ),
+            \TypeError::class,
+            'connect->payouts->create no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los parámetros de identity->verifications->create' => [
+            static fn(MockApi $api): mixed => $api->client()->identity->verifications->create(
+                ['type' => 'document', 'api_key' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'identity->verifications->create no acepta api_key entre los parámetros: va en las '
+                . 'opciones',
+        ];
+        yield 'apiKey entre los filtros de IdentityVerification::list' => [
+            static fn(MockApi $api): mixed => IdentityVerification::list(
+                ['apiKey' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'identity->verifications->list no acepta apiKey entre los parámetros: va en las '
+                . 'opciones',
         ];
         yield 'api_key entre los parámetros de oauth->token' => [
             static fn(MockApi $api): mixed => $api->client(null)->oauth->token(
@@ -1010,6 +1257,24 @@ final class SecurityTest extends TestCase
             ),
             \TypeError::class,
             'oauth->token no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los parámetros de testHelpers->payments->simulateTransfer' => [
+            static fn(MockApi $api): mixed => $api->client()->testHelpers->payments
+                ->simulateTransfer('p', ['amount' => 1, 'api_key' => Fixtures::OTHER_KEY]),
+            \TypeError::class,
+            'testHelpers->payments->simulateTransfer no acepta api_key entre los parámetros: va en '
+                . 'las opciones',
+        ];
+        // El test helper rechaza la idempotency_key entre los parámetros antes de mirar el resto:
+        // con la clave al lado, tampoco queda en la traza.
+        yield 'idempotency_key y api_key entre los parámetros de Payment::simulateTransfer' => [
+            static fn(MockApi $api): mixed => Payment::simulateTransfer(
+                'p',
+                ['idempotency_key' => 'k', 'api_key' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'testHelpers->payments->simulateTransfer no acepta idempotency_key entre los '
+                . 'parámetros: no lleva Idempotency-Key',
         ];
     }
 
@@ -1534,6 +1799,10 @@ final class SecurityTest extends TestCase
             'TEST_KEY' => substr(Fixtures::TEST_KEY, $prefix),
             'OTHER_KEY' => substr(Fixtures::OTHER_KEY, $prefix),
             'ACCESS_TOKEN' => substr(Fixtures::ACCESS_TOKEN, strlen('raya_at_live_')),
+            'SANDBOX_ACCESS_TOKEN' => substr(
+                Fixtures::SANDBOX_ACCESS_TOKEN,
+                strlen('raya_at_test_'),
+            ),
             'WEBHOOK_SECRET' => Fixtures::WEBHOOK_SECRET,
             'PROXY_PASSWORD' => self::PROXY_PASSWORD,
         ];
