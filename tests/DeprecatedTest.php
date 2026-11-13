@@ -556,6 +556,18 @@ final class DeprecatedTest extends TestCase
         if (!extension_loaded('Zend OPcache') || PHP_OS_FAMILY === 'Windows') {
             self::markTestSkipped('opcache.preload necesita OPcache, y no anda en Windows.');
         }
+        // Antes de 8.3, PHP precarga como root cambiando a opcache.preload_user (initgroups), y en
+        // un user namespace sin privilegios (scripts/offline.sh en el CI) eso falla: sale con 1,
+        // sin mensaje. En Docker (scripts/dev.sh) corre como root de verdad.
+        $uidMapFile = '/proc/self/uid_map';
+        $uidMap = is_readable($uidMapFile) ? file_get_contents($uidMapFile) : false;
+        if (
+            PHP_VERSION_ID < 80300
+            && is_string($uidMap)
+            && preg_split('/\s+/', trim($uidMap)) !== ['0', '0', '4294967295']
+        ) {
+            self::markTestSkipped('Antes de 8.3, opcache.preload no anda en un user namespace.');
+        }
         $preload = sys_get_temp_dir() . '/rayacash-preload-' . bin2hex(random_bytes(6)) . '.php';
         file_put_contents($preload, strtr(<<<'PHP'
             <?php
