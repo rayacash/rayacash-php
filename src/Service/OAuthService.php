@@ -24,7 +24,8 @@ class OAuthService
     // Qué es cada parámetro, para el error de uno que falta o no es un string.
     private const HINTS = [
         'client_id' => "el número de tu aplicación, como '7650337728110670', entre comillas",
-        'client_secret' => 'el raya_cs_live_… de Developers › Apps',
+        'client_secret' => 'el raya_cs_live_… de Developers › Apps, o el raya_cs_test_… de una '
+            . 'app de un sandbox',
         'code' => 'el code que llegó a la query de tu redirect_uri',
         'redirect_uri' => 'la misma URL del link de autorización',
     ];
@@ -49,8 +50,9 @@ class OAuthService
      *     code: string,
      *     redirect_uri: string,
      * } $params client_id, el número de tu aplicación (16 dígitos, como string); client_secret,
-     *     el raya_cs_live_… de Developers › Apps (solo en tu servidor); code, el de la query de
-     *     tu redirect_uri; redirect_uri, exactamente la misma URL del link de autorización.
+     *     el raya_cs_live_… de Developers › Apps (en una app de un sandbox, su raya_cs_test_…;
+     *     solo en tu servidor); code, el de la query de tu redirect_uri; redirect_uri, exactamente
+     *     la misma URL del link de autorización.
      * @param array{timeout?: int|float|null, max_network_retries?: int|null} $options
      * @throws \RayaCash\Exception\RayaException
      */

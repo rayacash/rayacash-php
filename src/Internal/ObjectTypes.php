@@ -6,7 +6,10 @@ namespace RayaCash\Internal;
 
 use RayaCash\Balance;
 use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Event;
+use RayaCash\IdentityVerification;
+use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -27,7 +30,10 @@ final class ObjectTypes
         // cambio si se reenvía.
         'checkout' => ConnectOrder::class,
         'connect.order' => ConnectOrder::class,
+        'connect.payout' => ConnectPayout::class,
         'event' => Event::class,
+        'identity.verification' => IdentityVerification::class,
+        'identity.verification_files' => IdentityVerificationFiles::class,
         'list' => ListObject::class,
         'oauth_token' => OAuthToken::class,
         'payment' => Payment::class,
@@ -39,6 +45,9 @@ final class ObjectTypes
     private const NOUNS = [
         Balance::class => 'un saldo',
         ConnectOrder::class => 'un pago de Connect',
+        ConnectPayout::class => 'un payout',
+        IdentityVerification::class => 'una verificación',
+        IdentityVerificationFiles::class => 'el objeto de las imágenes de una verificación',
         ListObject::class => 'una lista',
         OAuthToken::class => 'un access_token',
         Payment::class => 'un pago',

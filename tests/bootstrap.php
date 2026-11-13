@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-// Arranque de PHPUnit. Ningún test puede llamar a la API real: no hay sandbox y cada request
+// Arranque de PHPUnit. Ningún test puede llamar a la API real: con una clave real, cada request
 // mueve plata. Tres capas, de adentro hacia afuera:
 //
 // 1. El cliente HTTP propio del SDK sale de una fábrica que falla (Support\TestCase::isolate()):

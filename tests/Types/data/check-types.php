@@ -15,6 +15,7 @@ namespace RayaCash\Tests\Types\Data;
 use RayaCash\Balance;
 use RayaCash\Checkout;
 use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
@@ -24,6 +25,7 @@ use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\HttpClient\HttpClientInterface;
 use RayaCash\HttpClient\Request;
 use RayaCash\HttpClient\Response;
+use RayaCash\IdentityVerification;
 use RayaCash\OAuth;
 use RayaCash\Payment;
 use RayaCash\RayaCash;
@@ -108,6 +110,175 @@ function clientStyle(RayaClient $client, \Stringable $decimal): void
     } elseif ($object instanceof ConnectOrder) {
         assertType('RayaCash\ConnectOrder', $object);
     }
+}
+
+/** Raya Connect: los payouts, desde tu saldo y con tu clave secreta. */
+function connectPayouts(RayaClient $client, \Stringable $decimal): void
+{
+    $payout = $client->connect->payouts->create(
+        ['amount' => $decimal, 'destination' => '0000123305838495183140'],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\ConnectPayout', $payout);
+    assertType("'connect.payout'", $payout->object);
+    assertType("'connect.payout'", ConnectPayout::OBJECT_NAME);
+    assertType("'completed'|'failed'|'pending'|'reversed'", $payout->status);
+    assertType("'completed'", ConnectPayout::STATUS_COMPLETED);
+    assertType('float|int', $payout->amount);
+    assertType('float|int', $payout->processing_fee);
+    assertType('float|int', $payout->net_amount);
+    assertType('string', $payout->currency);
+    assertType('RayaCash\ConnectPayout\Origin', $payout->origin);
+    assertType('string', $payout->origin->account);
+    assertType('string|null', $payout->origin->alias);
+    assertType('string', $payout->origin->name);
+    assertType('RayaCash\ConnectPayout\Counterparty', $payout->counterparty);
+    assertType('string|null', $payout->counterparty->tax_id);
+    assertType('string|null', $payout->reference);
+    assertType('string', $payout->created_at);
+    assertType('RayaCash\ConnectPayout', $client->connect->payouts->retrieve('id'));
+    $page = $client->connect->payouts->list([
+        'status' => 'completed',
+        'limit' => 100,
+        'created_gte' => new \DateTimeImmutable(),
+    ]);
+    assertType('RayaCash\ListObject<RayaCash\ConnectPayout>', $page);
+    assertType('list<RayaCash\ConnectPayout>', $page->data);
+    foreach ($page->autoPagingIter() as $item) {
+        assertType('RayaCash\ConnectPayout', $item);
+    }
+}
+
+/** Identidad: las verificaciones, con tu clave secreta (types.test-d.ts de su SDK de Node). */
+function identityVerifications(RayaClient $client): void
+{
+    assertType('RayaCash\Service\IdentityService', $client->identity);
+    assertType('RayaCash\Service\IdentityVerificationService', $client->identity->verifications);
+    $verification = $client->identity->verifications->create(
+        [
+            'type' => 'document',
+            'external_reference' => 'cliente-8812',
+            'metadata' => ['plan' => 'pro'],
+            'return_url' => 'https://tienda.example.com/cuenta',
+            'expires_in' => 86400,
+        ],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\IdentityVerification', $verification);
+    assertType('RayaCash\RayaResponse|null', $verification->getLastResponse());
+    assertType("'identity.verification'", $verification->object);
+    assertType("'identity.verification'", IdentityVerification::OBJECT_NAME);
+    assertType("'biometric'|'document'", $verification->type);
+    assertType("'document'", IdentityVerification::TYPE_DOCUMENT);
+    assertType(
+        "'canceled'|'declined'|'expired'|'in_progress'|'pending'|'processing'|'verified'",
+        $verification->status,
+    );
+    assertType("'verified'", IdentityVerification::STATUS_VERIFIED);
+    assertType("'registry_unavailable'", IdentityVerification::DECLINE_CODE_REGISTRY_UNAVAILABLE);
+    assertType('string', $verification->url);
+    assertType('string|null', $verification->external_reference);
+    assertType('array<string>', $verification->metadata);
+    assertType('string|null', $verification->reference);
+    assertType('RayaCash\IdentityVerification\Person|null', $verification->person);
+    assertType('string|null', $verification->person?->cuil);
+    assertType('string|null', $verification->person?->address->city);
+    assertType('string|null', $verification->person?->document->expiry_date);
+    assertType('RayaCash\IdentityVerification\Checks', $verification->checks);
+    assertType(
+        "'failed'|'not_applicable'|'passed'|'pending'|'unavailable'",
+        $verification->checks->registry->status,
+    );
+    assertType("'accepted'|'failed'|'hit'|null", $verification->checks->registry->face_match);
+    assertType('bool|null', $verification->checks->registry->data_match);
+    assertType('float|int|null', $verification->checks->liveness->confidence);
+    assertType('float|int|null', $verification->checks->face_match->similarity);
+    assertType('RayaCash\IdentityVerification\DeclineReason|null', $verification->decline_reason);
+    assertType(
+        "'attempts_exhausted'|'face_mismatch'|'registry_data_mismatch'|'registry_not_found'"
+        . "|'registry_unavailable'|null",
+        $verification->decline_reason?->code,
+    );
+    assertType('float|int|null', $verification->amount);
+    assertType('string', $verification->currency);
+    assertType('string|null', $verification->completed_at);
+    assertType('string', $verification->expires_at);
+
+    assertType('RayaCash\IdentityVerification', $client->identity->verifications->retrieve('id'));
+    assertType(
+        'RayaCash\IdentityVerification',
+        $client->identity->verifications->create(['type' => 'biometric', 'reference' => 'idv_x']),
+    );
+    $page = $client->identity->verifications->list([
+        'status' => 'verified',
+        'type' => 'document',
+        'external_reference' => 'cliente-8812',
+        'created_gte' => new \DateTimeImmutable(),
+        'created_lt' => '2026-11-11T00:00:00Z',
+        'limit' => 100,
+        'cursor' => 'c',
+    ]);
+    assertType('RayaCash\ListObject<RayaCash\IdentityVerification>', $page);
+    assertType('list<RayaCash\IdentityVerification>', $page->data);
+    foreach ($page->autoPagingIter() as $item) {
+        assertType('RayaCash\IdentityVerification', $item);
+    }
+    assertType('RayaCash\ListObject<RayaCash\IdentityVerification>', $page->nextPage());
+    assertType(
+        'RayaCash\IdentityVerification',
+        $client->identity->verifications->cancel('id', ['idempotency_key' => 'c']),
+    );
+    assertType('RayaCash\IdentityVerification', $verification->cancel());
+    assertType('RayaCash\IdentityVerification', $verification->cancel(['idempotency_key' => 'c']));
+
+    $files = $client->identity->verifications->files('id');
+    assertType('RayaCash\IdentityVerificationFiles', $files);
+    assertType('RayaCash\IdentityVerificationFiles\File|null', $files->front);
+    assertType('RayaCash\IdentityVerificationFiles\File|null', $files->back);
+    assertType('RayaCash\IdentityVerificationFiles\File|null', $files->selfie);
+    assertType('string|null', $files->selfie?->url);
+
+    // En los webhooks, la verificación sale con instanceof.
+    $object = $client->constructEvent('{}', 't=1,v1=x', 'whsec_x')->data->object;
+    if ($object instanceof IdentityVerification) {
+        assertType('RayaCash\IdentityVerification', $object);
+        assertType('RayaCash\IdentityVerification\Person|null', $object->person);
+    }
+}
+
+/**
+ * Un sandbox, con su clave secreta de prueba: el test helper devuelve un Payment o un
+ * ConnectOrder (según el id), y los eventos traen livemode.
+ */
+function sandbox(RayaClient $client, Event $event, \Stringable $decimal): void
+{
+    assertType('RayaCash\Service\SandboxHelpersService', $client->testHelpers);
+    assertType('RayaCash\Service\SandboxPaymentHelpersService', $client->testHelpers->payments);
+    $simulated = $client->testHelpers->payments->simulateTransfer('id');
+    assertType('RayaCash\ConnectOrder|RayaCash\Payment', $simulated);
+    assertType(
+        'RayaCash\ConnectOrder|RayaCash\Payment',
+        $client->testHelpers->payments->simulateTransfer(
+            'id',
+            ['amount' => $decimal],
+            ['timeout' => 5, 'max_network_retries' => 0],
+        ),
+    );
+    // El tipo concreto sale con instanceof, como el data->object de un evento.
+    if ($simulated instanceof Payment) {
+        assertType("'amount_mismatch'|null", $simulated->failure_code);
+    } else {
+        assertType('RayaCash\ConnectOrder', $simulated);
+        assertType('float|int', $simulated->fee);
+    }
+    // Con el estilo global.
+    assertType(
+        'RayaCash\ConnectOrder|RayaCash\Payment',
+        Payment::simulateTransfer('id', ['amount' => 1500]),
+    );
+    // true en la cuenta real, false en un sandbox; sin el campo (un evento viejo reenviado), ??.
+    assertType('bool', $event->livemode);
+    assertType('bool', $event->livemode ?? true);
 }
 
 /** Raya Connect: el canje del code, la cuenta y sus pagos. */
@@ -218,6 +389,29 @@ function globalStyle(): void
     assertType('RayaCash\ConnectOrder', $connectOrder->refund());
     assertType('RayaCash\ConnectOrder', ConnectOrder::retrieve('id'));
     assertType('RayaCash\ConnectOrder', ConnectOrder::refundById('id'));
+    // Los payouts, con la clave secreta global.
+    assertType(
+        'RayaCash\ConnectPayout',
+        ConnectPayout::create(
+            ['amount' => 60000, 'destination' => 'ana.ejemplo'],
+            ['idempotency_key' => 'k'],
+        ),
+    );
+    assertType('RayaCash\ConnectPayout', ConnectPayout::retrieve('id'));
+    assertType('RayaCash\ListObject<RayaCash\ConnectPayout>', ConnectPayout::list());
+    // Identidad, con la clave secreta global. Por id, la cancelación es cancelById().
+    assertType(
+        'RayaCash\IdentityVerification',
+        IdentityVerification::create(['type' => 'document'], ['idempotency_key' => 'k']),
+    );
+    assertType('RayaCash\IdentityVerification', IdentityVerification::retrieve('id'));
+    assertType('RayaCash\ListObject<RayaCash\IdentityVerification>', IdentityVerification::list());
+    assertType('RayaCash\IdentityVerification', IdentityVerification::cancelById('id'));
+    assertType('RayaCash\IdentityVerificationFiles', IdentityVerification::files('id'));
+    assertType(
+        'RayaCash\IdentityVerification',
+        IdentityVerification::constructFrom(['object' => 'identity.verification']),
+    );
 }
 
 /**
@@ -403,13 +597,19 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
     assertType(
         "'checkout.created'|'checkout.failed'|'checkout.refunded'|'checkout.succeeded'"
         . "|'connect.order.created'|'connect.order.failed'|'connect.order.refunded'"
-        . "|'connect.order.succeeded'|'payment.created'|'payment.failed'|'payment.refunded'"
-        . "|'payment.succeeded'|'transfer.failed'|'transfer.received'|'transfer.sent'"
-        . "|'webhook.test'",
+        . "|'connect.order.succeeded'|'identity.verification.canceled'"
+        . "|'identity.verification.declined'|'identity.verification.expired'"
+        . "|'identity.verification.verified'|'payment.created'|'payment.failed'"
+        . "|'payment.refunded'|'payment.succeeded'|'transfer.failed'|'transfer.received'"
+        . "|'transfer.sent'|'webhook.test'",
         $event->type,
     );
     assertType("'payment.succeeded'", Event::TYPE_PAYMENT_SUCCEEDED);
     assertType("'connect.order.succeeded'", Event::TYPE_CONNECT_ORDER_SUCCEEDED);
+    assertType(
+        "'identity.verification.verified'",
+        Event::TYPE_IDENTITY_VERIFICATION_VERIFIED,
+    );
     assertType('string', $balance->currency);
     // Lo que no tiene tipo en la doc, por nombre: mixed (un campo nuevo de la API, por ejemplo).
     assertType('mixed', $payment['campo_nuevo']);

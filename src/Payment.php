@@ -7,6 +7,7 @@ namespace RayaCash;
 use RayaCash\Internal\GlobalState;
 use RayaCash\Internal\Params;
 use RayaCash\Service\PaymentService;
+use RayaCash\Service\SandboxPaymentHelpersService;
 
 /**
  * Un cobro único por transferencia bancaria, con un CVU y un alias exclusivos.
@@ -75,7 +76,8 @@ final class Payment extends RayaObject
         return (new PaymentService($this->resolveRequestor()))->refund($id, $options);
     }
 
-    // --- Estilo global (Payment::create/retrieve/refundById); ver PaymentService. ---
+    // --- Estilo global (Payment::create/retrieve/refundById/simulateTransfer); ver PaymentService
+    // y SandboxPaymentHelpersService. ---
 
     /**
      * Crea un pago con un CVU exclusivo. Usá un timeout de al menos 60 s (es el default).
@@ -137,5 +139,36 @@ final class Payment extends RayaObject
     ): Payment {
         Params::arguments('Payment::refundById', func_num_args(), ['paymentId', 'options']);
         return (new PaymentService(GlobalState::requestor()))->refund($paymentId, $options);
+    }
+
+    /**
+     * Simula la transferencia de un pago de prueba, con el estilo global y la clave global puesta
+     * en la clave secreta de prueba de un sandbox (raya_sk_test_…): el de
+     * `$client->testHelpers->payments->simulateTransfer()`. Devuelve el Payment o, con el id de un
+     * pago de Raya Connect de una app del sandbox, su ConnectOrder.
+     *
+     * @param array{amount?: int|float|string|\Stringable|null} $params
+     * @param array{
+     *     api_key?: string|null,
+     *     timeout?: int|float|null,
+     *     max_network_retries?: int|null,
+     * } $options
+     */
+    public static function simulateTransfer(
+        string $paymentId,
+        array $params = [],
+        #[\SensitiveParameter]
+        array $options = [],
+    ): Payment|ConnectOrder {
+        Params::arguments(
+            'Payment::simulateTransfer',
+            func_num_args(),
+            ['paymentId', 'params', 'options'],
+        );
+        return (new SandboxPaymentHelpersService(GlobalState::requestor()))->simulateTransfer(
+            $paymentId,
+            $params,
+            $options,
+        );
     }
 }

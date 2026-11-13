@@ -294,15 +294,15 @@ final class ClientTest extends TestCase
     }
 
     /**
-     * El access_token de la cuenta de prueba de una app (raya_at_test_…, el de Developers › Apps ›
-     * tu app › Test) también: viaja igual, y la máscara conserva su prefijo y sus últimos 4.
+     * El access_token de un usuario de prueba de un sandbox (raya_at_test_…) también: viaja
+     * igual, y la máscara conserva su prefijo y sus últimos 4.
      */
-    public function testTestModeAccessTokenIsAKeyMaskedWithItsPrefix(): void
+    public function testSandboxAccessTokenIsAKeyMaskedWithItsPrefix(): void
     {
-        $connected = $this->api->client(Fixtures::TEST_MODE_ACCESS_TOKEN);
+        $connected = $this->api->client(Fixtures::SANDBOX_ACCESS_TOKEN);
         $this->api->add(200, Fixtures::USER);
         $connected->users->retrieve('me');
-        self::assertSame(self::bearer(Fixtures::TEST_MODE_ACCESS_TOKEN), $this->authorization());
+        self::assertSame(self::bearer(Fixtures::SANDBOX_ACCESS_TOKEN), $this->authorization());
         self::assertSame(
             ['api_base' => 'https://api.raya.cash', 'api_key' => 'raya_at_test_…L0sA'],
             $connected->__debugInfo(),
@@ -312,6 +312,41 @@ final class ClientTest extends TestCase
             'raya_at_test_…',
             (new RayaClient('raya_at_test_12345678'))->__debugInfo()['api_key'],
         );
+    }
+
+    /**
+     * La clave secreta de prueba de un sandbox (raya_sk_test_…), el par de la real: viaja igual,
+     * con la misma api_base (la clave decide el entorno), y la máscara conserva su prefijo, en el
+     * cliente, en una clave por llamada y en la Request.
+     */
+    public function testSandboxSecretKeyIsMaskedWithItsPrefix(): void
+    {
+        $sandbox = $this->api->client(Fixtures::SANDBOX_KEY);
+        $masked = 'raya_sk_test_…IJKL';
+        self::assertSame(
+            ['api_base' => 'https://api.raya.cash', 'api_key' => $masked],
+            $sandbox->__debugInfo(),
+        );
+        $this->api->add(200, Fixtures::BALANCE);
+        $sandbox->balance->retrieve();
+        self::assertSame(self::bearer(Fixtures::SANDBOX_KEY), $this->authorization());
+        self::assertSame('https://api.raya.cash/v1/balance', $this->api->last()->url);
+        $this->api->add(200, Fixtures::BALANCE);
+        $this->api->client()->balance->retrieve(['api_key' => Fixtures::SANDBOX_KEY]);
+        self::assertSame(self::bearer(Fixtures::SANDBOX_KEY), $this->authorization());
+        $request = $this->api->last()->request;
+        $shown = print_r($request, true) . print_r($sandbox, true);
+        self::assertStringContainsString($masked, $shown);
+        self::assertStringNotContainsString(
+            substr(Fixtures::SANDBOX_KEY, strlen('raya_sk_test_')),
+            $shown,
+        );
+        // Con 8 caracteres o menos después del prefijo, solo el prefijo (como mask_key).
+        self::assertSame(
+            'raya_sk_test_…',
+            (new RayaClient('raya_sk_test_12345678'))->__debugInfo()['api_key'],
+        );
+        self::assertCount(2, $this->api->requests);
     }
 
     public function testUnknownOptionsAreRejected(): void

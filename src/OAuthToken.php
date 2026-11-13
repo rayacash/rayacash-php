@@ -19,8 +19,12 @@ use RayaCash\Internal\Secret;
  * (raya_at_live_…G9hJ), para que no termine entero en un log. `$token->access_token`, toArray() y
  * json_encode($token) lo dan entero, para guardarlo.
  *
+ * Con un usuario de prueba de un sandbox, el access_token es de prueba (raya_at_test_…) y se
+ * enmascara igual, con su prefijo.
+ *
  * @property-read 'oauth_token' $object
- * @property-read string $access_token raya_at_live_…: va en Authorization: Bearer, como una clave.
+ * @property-read string $access_token raya_at_live_… (raya_at_test_… si es un usuario de prueba de
+ *     un sandbox): va en Authorization: Bearer, como una clave.
  * @property-read string $token_type Siempre 'Bearer'.
  * @property-read string $scope Los permisos que dio la cuenta, separados por espacio
  *     ('orders profile').

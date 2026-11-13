@@ -7,9 +7,12 @@ namespace RayaCash\Tests;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\Balance;
 use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
 use RayaCash\HttpClient\HttpClientInterface;
+use RayaCash\IdentityVerification;
+use RayaCash\IdentityVerificationFiles;
 use RayaCash\Internal\Transport;
 use RayaCash\ListObject;
 use RayaCash\OAuth;
@@ -103,6 +106,75 @@ final class GlobalTest extends TestCase
         self::assertSame('/v1/payments/' . Fixtures::PAYMENT_ID . '/refund', $api->last()->path);
         self::assertSame('r-1', $api->last()->header('idempotency-key'));
 
+        // Los payouts de Raya Connect, con la clave secreta, como las transferencias.
+        $api->add(201, Fixtures::CONNECT_PAYOUT_PENDING);
+        $payout = ConnectPayout::create(
+            ['amount' => 60000, 'destination' => 'ana.ejemplo'],
+            ['idempotency_key' => 'p-1'],
+        );
+        self::assertSame(ConnectPayout::class, $payout::class);
+        self::assertSame(['amount' => 60000, 'destination' => 'ana.ejemplo'], $api->lastJson());
+        self::assertSame('p-1', $api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+
+        $api->add(200, Fixtures::CONNECT_PAYOUT_COMPLETED);
+        $payout = ConnectPayout::retrieve(Fixtures::CONNECT_PAYOUT_ID);
+        self::assertSame('completed', $payout->status);
+        self::assertSame('/v1/connect/payouts/' . Fixtures::CONNECT_PAYOUT_ID, $api->last()->path);
+
+        $api->add(200, Fixtures::CONNECT_PAYOUT_LIST);
+        $payouts = ConnectPayout::list(['status' => 'completed', 'limit' => 2]);
+        self::assertSame(ListObject::class, $payouts::class);
+        self::assertSame(ConnectPayout::class, $payouts->data[0]::class);
+        self::assertSame('/v1/connect/payouts', $api->last()->path);
+        self::assertSame(['status' => 'completed', 'limit' => '2'], $api->last()->query);
+
+        // Identidad, con la clave secreta. IdentityVerification.cancel(id) en Python y Node; acá,
+        // IdentityVerification::cancelById($id).
+        $api->add(201, Fixtures::VERIFICATION_PENDING);
+        $verification = IdentityVerification::create(
+            ['type' => 'document', 'metadata' => ['plan' => 'pro']],
+            ['idempotency_key' => 'v-1'],
+        );
+        self::assertSame(IdentityVerification::class, $verification::class);
+        self::assertSame(['type' => 'document', 'metadata' => ['plan' => 'pro']], $api->lastJson());
+        self::assertSame('v-1', $api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+
+        $api->add(200, Fixtures::VERIFICATION_VERIFIED);
+        $verification = IdentityVerification::retrieve(Fixtures::VERIFICATION_ID);
+        self::assertSame('verified', $verification->status);
+        self::assertSame(
+            '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID,
+            $api->last()->path,
+        );
+
+        $api->add(200, Fixtures::VERIFICATION_LIST);
+        $verifications = IdentityVerification::list(['status' => 'verified', 'limit' => 2]);
+        self::assertSame(ListObject::class, $verifications::class);
+        self::assertSame(IdentityVerification::class, $verifications->data[0]::class);
+        self::assertSame(['status' => 'verified', 'limit' => '2'], $api->last()->query);
+
+        $api->add(200, Fixtures::VERIFICATION_CANCELED);
+        $canceled = IdentityVerification::cancelById(
+            Fixtures::VERIFICATION_ID,
+            ['idempotency_key' => 'c-1'],
+        );
+        self::assertSame('canceled', $canceled->status);
+        self::assertSame(
+            '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID . '/cancel',
+            $api->last()->path,
+        );
+        self::assertSame('c-1', $api->last()->header('idempotency-key'));
+
+        $api->add(200, Fixtures::VERIFICATION_FILES);
+        $files = IdentityVerification::files(Fixtures::VERIFICATION_ID);
+        self::assertSame(IdentityVerificationFiles::class, $files::class);
+        self::assertSame(
+            '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID . '/files',
+            $api->last()->path,
+        );
+
         // Raya Connect. OAuth::token no lleva Authorization: la clave global no viaja.
         $api->add(200, Fixtures::OAUTH_TOKEN);
         $token = OAuth::token(self::TOKEN_PARAMS);
@@ -183,6 +255,77 @@ final class GlobalTest extends TestCase
         self::assertCount(2, $this->api->requests);
     }
 
+    /**
+     * $verification->cancel() devuelve una verificación nueva y usa el cliente del que vino (o el
+     * estilo global). Por id, con el estilo global, es IdentityVerification::cancelById(): PHP no
+     * deja tener un cancel() estático y otro de instancia.
+     */
+    public function testIdentityVerificationInstanceCancel(): void
+    {
+        $this->globalApi();
+        $this->api->add(200, Fixtures::VERIFICATION_PENDING);
+        $verification = IdentityVerification::retrieve(Fixtures::VERIFICATION_ID);
+        $this->api->add(200, Fixtures::VERIFICATION_CANCELED);
+        $canceled = $verification->cancel();
+        self::assertSame(['canceled', 'pending'], [$canceled->status, $verification->status]);
+        self::assertSame(
+            '/v1/identity/verifications/' . Fixtures::VERIFICATION_ID . '/cancel',
+            $this->api->last()->path,
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+
+        // Con el cliente del que vino, no con el estilo global.
+        $otherApi = new MockApi();
+        $otherApi->add(200, Fixtures::VERIFICATION_PENDING);
+        $fromClient = $otherApi->client(Fixtures::OTHER_KEY)->identity->verifications->retrieve(
+            Fixtures::VERIFICATION_ID,
+        );
+        $otherApi->add(200, Fixtures::VERIFICATION_CANCELED);
+        $fromClient->cancel(['idempotency_key' => 'c-2']);
+        $request = $otherApi->last();
+        self::assertSame('Bearer ' . Fixtures::OTHER_KEY, $request->header('authorization'));
+        self::assertSame('c-2', $request->header('idempotency-key'));
+        self::assertCount(2, $this->api->requests);
+
+        $error = self::assertThrows(
+            \Error::class,
+            // @phpstan-ignore method.staticCall, argument.type (IdentityVerification.cancel(id))
+            static fn() => IdentityVerification::cancel(Fixtures::VERIFICATION_ID),
+            'cannot be called statically',
+        );
+        self::assertSame(\Error::class, $error::class);
+        $withoutId = [
+            [],
+            ['object' => 'identity.verification', 'id' => ''],
+            ['object' => 'identity.verification', 'id' => null],
+            ['object' => 'identity.verification', 'id' => 8812],
+        ];
+        foreach ($withoutId as $values) {
+            self::assertThrows(
+                \ValueError::class,
+                static fn() => IdentityVerification::constructFrom($values)->cancel(),
+                'Esta IdentityVerification no tiene id: no se puede cancelar.',
+            );
+        }
+        self::assertCount(2, $this->api->requests);
+    }
+
+    /** Un evento de Identidad del estilo global: su verificación se cancela con la clave global. */
+    public function testIdentityEventsFromWebhookConstructEventUseTheGlobalStyle(): void
+    {
+        $this->globalApi();
+        $body = json_encode(Fixtures::EVENT_VERIFICATION_VERIFIED, JSON_THROW_ON_ERROR);
+        $header = WebhookSignature::generateHeader($body, Fixtures::WEBHOOK_SECRET);
+        $event = Webhook::constructEvent($body, $header, Fixtures::WEBHOOK_SECRET);
+        $verification = $event->data->object;
+        self::assertInstanceOf(IdentityVerification::class, $verification);
+        self::assertNull($verification->person);
+        $this->api->add(200, Fixtures::VERIFICATION_CANCELED);
+        $verification->cancel(['idempotency_key' => 'c-3']);
+        self::assertSame('c-3', $this->api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+    }
+
     public function testInstanceRefund(): void
     {
         $this->globalApi();
@@ -227,6 +370,49 @@ final class GlobalTest extends TestCase
         self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
         self::assertSame([5.0, 5.0], [$request->timeout, $request->connectTimeout]);
         self::assertSame([], $this->api->requests);
+    }
+
+    /**
+     * Payment::simulateTransfer($id), con la clave global puesta en la clave secreta de prueba de
+     * un sandbox: el de $client->testHelpers->payments, sin Idempotency-Key. Devuelve el Payment
+     * o el ConnectOrder, según "object".
+     */
+    public function testSimulateTransferWithTheGlobalStyle(): void
+    {
+        RayaCash::setApiKey(Fixtures::SANDBOX_KEY);
+        RayaCash::setHttpClient($this->api);
+        $this->api->add(200, Fixtures::SANDBOX_PAYMENT_SUCCEEDED);
+        $payment = Payment::simulateTransfer(Fixtures::SANDBOX_PAYMENT_ID);
+        self::assertSame(Payment::class, $payment::class);
+        self::assertSame('succeeded', $payment->status);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', '/v1/test/payments/' . Fixtures::SANDBOX_PAYMENT_ID . '/simulate_transfer'],
+            [$request->method, $request->path],
+        );
+        self::assertNull($request->body);
+        self::assertNull($request->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::SANDBOX_KEY, $this->lastAuthorization());
+
+        $this->api->add(200, Fixtures::SANDBOX_ORDER_SUCCEEDED);
+        $order = Payment::simulateTransfer(
+            Fixtures::SANDBOX_ORDER_ID,
+            ['amount' => 1500],
+            ['timeout' => 5],
+        );
+        self::assertSame(ConnectOrder::class, $order::class);
+        self::assertSame('{"amount":1500}', $this->api->last()->body);
+        self::assertSame(5.0, $this->api->last()->timeout);
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => Payment::simulateTransfer(
+                Fixtures::SANDBOX_PAYMENT_ID,
+                [],
+                ['idempotency_key' => 'k'],
+            ),
+            'testHelpers->payments->simulateTransfer no acepta idempotency_key',
+        );
+        self::assertCount(2, $this->api->requests);
     }
 
     /**
@@ -620,6 +806,11 @@ final class GlobalTest extends TestCase
             '$payment->refund recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
         ];
+        yield 'Payment::simulateTransfer' => [
+            static fn(): mixed => Payment::simulateTransfer('p', [], [], $options),
+            'Payment::simulateTransfer recibe 3 argumentos (paymentId, params y options), no 4: '
+                . "las opciones van en el tercero, como ['api_key' => …].",
+        ];
         yield 'OAuth::token' => [
             static fn(): mixed => OAuth::token(self::TOKEN_PARAMS, [], $options),
             'OAuth::token recibe 2 argumentos (params y options), no 3: las opciones van en el '
@@ -649,6 +840,42 @@ final class GlobalTest extends TestCase
             static fn(): mixed => ConnectOrder::constructFrom(Fixtures::CONNECT_ORDER_SUCCEEDED)
                 ->refund([], $options),
             '$connectOrder->refund recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        yield 'IdentityVerification::create' => [
+            static fn(): mixed => IdentityVerification::create(
+                ['type' => 'document'],
+                [],
+                $options,
+            ),
+            'IdentityVerification::create recibe 2 argumentos (params y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'IdentityVerification::retrieve' => [
+            static fn(): mixed => IdentityVerification::retrieve('idv_x', [], $options),
+            'IdentityVerification::retrieve recibe 2 argumentos (verificationId y options), no 3: '
+                . "las opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'IdentityVerification::list' => [
+            static fn(): mixed => IdentityVerification::list([], [], $options),
+            'IdentityVerification::list recibe 2 argumentos (params y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'IdentityVerification::cancelById' => [
+            static fn(): mixed => IdentityVerification::cancelById('idv_x', [], $options),
+            'IdentityVerification::cancelById recibe 2 argumentos (verificationId y options), no '
+                . "3: las opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'IdentityVerification::files' => [
+            static fn(): mixed => IdentityVerification::files('idv_x', [], $options),
+            'IdentityVerification::files recibe 2 argumentos (verificationId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield '$verification->cancel' => [
+            static fn(): mixed => IdentityVerification::constructFrom(
+                Fixtures::VERIFICATION_PENDING,
+            )->cancel([], $options),
+            '$verification->cancel recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
         ];
     }

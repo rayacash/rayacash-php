@@ -19,8 +19,10 @@ use RayaCash\Internal\UserAgent;
 use RayaCash\Internal\Validation;
 use RayaCash\Service\BalanceService;
 use RayaCash\Service\ConnectService;
+use RayaCash\Service\IdentityService;
 use RayaCash\Service\OAuthService;
 use RayaCash\Service\PaymentService;
+use RayaCash\Service\SandboxHelpersService;
 use RayaCash\Service\TransferService;
 use RayaCash\Service\UserService;
 
@@ -38,7 +40,12 @@ use RayaCash\Service\UserService;
  *
  * Si tu aplicación cobra a nombre de otras cuentas (Raya Connect), un RayaClient armado con el
  * access_token de la cuenta conectada (raya_at_live_…) opera por ella: `$connected->users` y
- * `$connected->connect->orders`. `$client->oauth->token()` no necesita clave.
+ * `$connected->connect->orders`. Los payouts (`$client->connect->payouts`), que salen de tu
+ * saldo, van con tu clave secreta, como el resto de la API. `$client->oauth->token()` no necesita
+ * clave.
+ *
+ * En un sandbox, el cliente va con su clave secreta de prueba (raya_sk_test_…) y la misma
+ * api_base: la clave decide el entorno. `$client->testHelpers` solo funciona ahí.
  *
  * @final
  */
@@ -68,8 +75,24 @@ class RayaClient
     /** Los datos de las cuentas que conectaron tu aplicación (con su access_token). */
     public readonly UserService $users;
 
-    /** Cobrar a nombre de una cuenta conectada, con tu comisión (con su access_token). */
+    /**
+     * Raya Connect: `orders` cobra a nombre de una cuenta conectada, con tu comisión (con su
+     * access_token), y `payouts` envía pesos desde tu saldo a tus vendedores (con tu clave
+     * secreta).
+     */
     public readonly ConnectService $connect;
+
+    /**
+     * Identidad: `verifications` verifica la identidad de tus clientes (DNI, prueba de vida y
+     * RENAPER), con tu clave secreta.
+     */
+    public readonly IdentityService $identity;
+
+    /**
+     * Lo que solo existe en un sandbox, con su clave secreta de prueba (raya_sk_test_…):
+     * `testHelpers->payments->simulateTransfer()` simula la transferencia de un pago de prueba.
+     */
+    public readonly SandboxHelpersService $testHelpers;
 
     /**
      * El nombre de `$connect` en la 1.1.0: el mismo objeto, así `$client->checkout->orders`
@@ -94,7 +117,8 @@ class RayaClient
      * new RayaClient(config: ['timeout' => 90]). Un valor en null usa el de por defecto.
      *
      * - api_key: tu clave secreta (raya_sk_live_…) o el access_token de una cuenta conectada
-     *   (raya_at_live_…). Si no la pasás, se lee de RAYA_SECRET_KEY.
+     *   (raya_at_live_…); en un sandbox, sus pares de prueba (raya_sk_test_… y raya_at_test_…).
+     *   Si no la pasás, se lee de RAYA_SECRET_KEY.
      * - api_base: por defecto, https://api.raya.cash.
      * - timeout: segundos por intento (por defecto 65, con 10 para conectar). El servidor corta a
      *   los 60 s y crear un pago puede tardar ~40 s.
@@ -208,6 +232,8 @@ class RayaClient
         // es la misma clase.
         // @phpstan-ignore assign.propertyType
         $this->checkout = $this->connect;
+        $this->identity = new IdentityService($this->requestor);
+        $this->testHelpers = new SandboxHelpersService($this->requestor);
     }
 
     /**

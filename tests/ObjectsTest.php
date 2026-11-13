@@ -6,8 +6,11 @@ namespace RayaCash\Tests;
 
 use RayaCash\Balance;
 use RayaCash\ConnectOrder;
+use RayaCash\ConnectPayout;
 use RayaCash\Event;
 use RayaCash\Exception\ApiException;
+use RayaCash\IdentityVerification;
+use RayaCash\IdentityVerificationFiles;
 use RayaCash\Internal\Hydrator;
 use RayaCash\Internal\ObjectToken;
 use RayaCash\ListObject;
@@ -122,6 +125,198 @@ final class ObjectsTest extends TestCase
         }
     }
 
+    public function testConnectPayoutNestedObjects(): void
+    {
+        $pending = self::convertAs(ConnectPayout::class, Fixtures::CONNECT_PAYOUT_PENDING);
+        self::assertSame(ConnectPayout\Origin::class, $pending->origin::class);
+        self::assertSame(
+            ['0000123368198805021689', 'raya.cash.ejemplo', 'Tienda Ejemplo'],
+            [$pending->origin->account, $pending->origin->alias, $pending->origin->name],
+        );
+        self::assertSame(ConnectPayout\Counterparty::class, $pending->counterparty::class);
+        self::assertSame(
+            ['Ana Ejemplo', '20345678902', '0000123305838495183140', 'ana.ejemplo'],
+            [
+                $pending->counterparty->name,
+                $pending->counterparty->tax_id,
+                $pending->counterparty->account,
+                $pending->counterparty->alias,
+            ],
+        );
+        self::assertSame(870.25, $pending->processing_fee);
+        self::assertSame(59129.75, $pending->net_amount);
+        self::assertNull($pending->reference);
+        // El JSON exacto de la API, ida y vuelta.
+        self::assertSame(Fixtures::CONNECT_PAYOUT_PENDING, self::jsonRoundTrip($pending));
+        self::assertSame(Fixtures::CONNECT_PAYOUT_PENDING, $pending->toArray());
+        self::assertSame(
+            json_encode(Fixtures::CONNECT_PAYOUT_PENDING, JSON_THROW_ON_ERROR),
+            json_encode($pending, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /** "connect.payout", como "connect.order": se busca entero, con su punto. */
+    public function testConnectPayoutObjectNameWithADot(): void
+    {
+        self::assertSame('connect.payout', ConnectPayout::OBJECT_NAME);
+        self::assertSame(
+            ['pending', 'completed', 'failed', 'reversed'],
+            [
+                ConnectPayout::STATUS_PENDING,
+                ConnectPayout::STATUS_COMPLETED,
+                ConnectPayout::STATUS_FAILED,
+                ConnectPayout::STATUS_REVERSED,
+            ],
+        );
+        $nested = RayaObject::constructFrom(['payout' => Fixtures::CONNECT_PAYOUT_COMPLETED]);
+        $payout = $nested['payout'];
+        self::assertInstanceOf(ConnectPayout::class, $payout);
+        self::assertSame('connect.payout', $payout->object);
+    }
+
+    /** Una verificación de Identidad: sus sub-objetos, con su clase, y la metadata como array. */
+    public function testIdentityVerificationNestedObjects(): void
+    {
+        $verified = self::convertAs(IdentityVerification::class, Fixtures::VERIFICATION_VERIFIED);
+        self::assertSame(Fixtures::VERIFICATION_ID, $verified->id);
+        self::assertSame(['plan' => 'pro'], $verified->metadata); // un array común
+        self::assertNull($verified->decline_reason);
+        $checks = $verified->checks;
+        self::assertSame(IdentityVerification\Checks::class, $checks::class);
+        self::assertSame(
+            [
+                IdentityVerification\DocumentCheck::class,
+                IdentityVerification\LivenessCheck::class,
+                IdentityVerification\FaceMatchCheck::class,
+                IdentityVerification\RegistryCheck::class,
+            ],
+            [
+                $checks->document::class,
+                $checks->liveness::class,
+                $checks->face_match::class,
+                $checks->registry::class,
+            ],
+        );
+        self::assertSame(
+            ['passed', 99.1, 97.4, true, 'hit'],
+            [
+                $checks->document->status,
+                $checks->liveness->confidence,
+                $checks->face_match->similarity,
+                $checks->registry->data_match,
+                $checks->registry->face_match,
+            ],
+        );
+        $person = $verified->person;
+        self::assertNotNull($person);
+        self::assertSame(IdentityVerification\Person::class, $person::class);
+        self::assertSame(['María Laura', '27123456781'], [$person->first_name, $person->cuil]);
+        self::assertSame(IdentityVerification\Address::class, $person->address::class);
+        self::assertSame(['Rosario', null], [$person->address->city, $person->address->floor]);
+        self::assertSame(IdentityVerification\IdentityDocument::class, $person->document::class);
+        self::assertSame('2035-01-31', $person->document->expiry_date);
+        self::assertSame([1000, 'ARS'], [$verified->amount, $verified->currency]);
+        // El JSON exacto de la API, ida y vuelta, con sus 19 campos en su orden.
+        self::assertSame(Fixtures::VERIFICATION_VERIFIED, self::jsonRoundTrip($verified));
+        self::assertSame(Fixtures::VERIFICATION_VERIFIED, $verified->toArray());
+        self::assertSame(
+            json_encode(Fixtures::VERIFICATION_VERIFIED, JSON_THROW_ON_ERROR),
+            json_encode($verified, JSON_THROW_ON_ERROR),
+        );
+        self::assertCount(19, $verified->toArray());
+
+        $declined = self::convertAs(IdentityVerification::class, Fixtures::VERIFICATION_DECLINED);
+        self::assertSame(
+            IdentityVerification\DeclineReason::class,
+            get_debug_type($declined->decline_reason),
+        );
+        self::assertSame('registry_data_mismatch', $declined->decline_reason?->code);
+        self::assertNull($declined->person);
+        self::assertSame(Fixtures::VERIFICATION_DECLINED, $declined->toArray());
+    }
+
+    /** Las claves de la metadata son tuyas: nunca se convierten, aunque parezcan un objeto. */
+    public function testIdentityVerificationMetadataStaysPlain(): void
+    {
+        $verification = self::convertAs(
+            IdentityVerification::class,
+            [
+                ...Fixtures::VERIFICATION_PENDING,
+                'metadata' => ['object' => 'identity.verification', 'keys' => 'x'],
+            ],
+        );
+        self::assertSame(
+            ['object' => 'identity.verification', 'keys' => 'x'],
+            $verification->metadata,
+        );
+    }
+
+    /**
+     * "identity.verification" e "identity.verification_files" se buscan enteros, con su punto,
+     * como "connect.order", también anidados en un objeto sin clase propia.
+     */
+    public function testIdentityVerificationObjectNamesWithADot(): void
+    {
+        self::assertSame('identity.verification', IdentityVerification::OBJECT_NAME);
+        self::assertSame('identity.verification_files', IdentityVerificationFiles::OBJECT_NAME);
+        self::assertSame(
+            ['document', 'biometric'],
+            [IdentityVerification::TYPE_DOCUMENT, IdentityVerification::TYPE_BIOMETRIC],
+        );
+        self::assertSame(
+            ['pending', 'in_progress', 'processing', 'verified', 'declined', 'expired', 'canceled'],
+            [
+                IdentityVerification::STATUS_PENDING,
+                IdentityVerification::STATUS_IN_PROGRESS,
+                IdentityVerification::STATUS_PROCESSING,
+                IdentityVerification::STATUS_VERIFIED,
+                IdentityVerification::STATUS_DECLINED,
+                IdentityVerification::STATUS_EXPIRED,
+                IdentityVerification::STATUS_CANCELED,
+            ],
+        );
+        self::assertSame(
+            [
+                'face_mismatch',
+                'registry_not_found',
+                'registry_data_mismatch',
+                'registry_unavailable',
+                'attempts_exhausted',
+            ],
+            [
+                IdentityVerification::DECLINE_CODE_FACE_MISMATCH,
+                IdentityVerification::DECLINE_CODE_REGISTRY_NOT_FOUND,
+                IdentityVerification::DECLINE_CODE_REGISTRY_DATA_MISMATCH,
+                IdentityVerification::DECLINE_CODE_REGISTRY_UNAVAILABLE,
+                IdentityVerification::DECLINE_CODE_ATTEMPTS_EXHAUSTED,
+            ],
+        );
+        $nested = RayaObject::constructFrom([
+            'verification' => Fixtures::VERIFICATION_PENDING,
+            'files' => Fixtures::VERIFICATION_FILES,
+            'other' => [...Fixtures::VERIFICATION_PENDING, 'object' => 'identity'],
+        ]);
+        self::assertSame(IdentityVerification::class, get_debug_type($nested['verification']));
+        self::assertSame(IdentityVerificationFiles::class, get_debug_type($nested['files']));
+        self::assertSame(RayaObject::class, get_debug_type($nested['other']));
+    }
+
+    /** Las imágenes que la verificación no tiene vienen en null; las que tiene, como File. */
+    public function testIdentityVerificationFilesWithNulls(): void
+    {
+        $files = self::convertAs(
+            IdentityVerificationFiles::class,
+            [...Fixtures::VERIFICATION_FILES, 'front' => null, 'back' => null],
+        );
+        self::assertNull($files->front);
+        self::assertNull($files->back);
+        self::assertSame(IdentityVerificationFiles\File::class, get_debug_type($files->selfie));
+        self::assertSame(Fixtures::VERIFICATION_FILES['selfie']['url'], $files->selfie?->url);
+        $all = self::convertAs(IdentityVerificationFiles::class, Fixtures::VERIFICATION_FILES);
+        self::assertSame(Fixtures::VERIFICATION_FILES, self::jsonRoundTrip($all));
+        self::assertSame(Fixtures::VERIFICATION_FILES, $all->toArray());
+    }
+
     public function testUserNestedObjects(): void
     {
         $user = self::convertAs(User::class, Fixtures::USER);
@@ -192,12 +387,15 @@ final class ObjectsTest extends TestCase
         self::assertSame("{\n  \"access_token\": \"\"\n}", (string) $empty);
     }
 
-    /** El de la cuenta de prueba de una app (raya_at_test_…): la misma máscara, con su prefijo. */
-    public function testOAuthTokenShowsATestModeAccessTokenMaskedWithItsPrefix(): void
+    /**
+     * El de un usuario de prueba de un sandbox (raya_at_test_…): la misma máscara, con su
+     * prefijo.
+     */
+    public function testOAuthTokenShowsASandboxAccessTokenMaskedWithItsPrefix(): void
     {
-        $values = [...Fixtures::OAUTH_TOKEN, 'access_token' => Fixtures::TEST_MODE_ACCESS_TOKEN];
+        $values = [...Fixtures::OAUTH_TOKEN, 'access_token' => Fixtures::SANDBOX_ACCESS_TOKEN];
         $token = self::convertAs(OAuthToken::class, $values);
-        self::assertSame(Fixtures::TEST_MODE_ACCESS_TOKEN, $token->access_token);
+        self::assertSame(Fixtures::SANDBOX_ACCESS_TOKEN, $token->access_token);
         $masked = 'raya_at_test_…L0sA';
         self::assertSame(
             self::sortedKeys([...$values, 'access_token' => $masked]),
@@ -205,7 +403,7 @@ final class ObjectsTest extends TestCase
         );
         $printed = print_r($token, true);
         self::assertStringContainsString("[access_token] => {$masked}", $printed);
-        $secret = substr(Fixtures::TEST_MODE_ACCESS_TOKEN, strlen('raya_at_test_'));
+        $secret = substr(Fixtures::SANDBOX_ACCESS_TOKEN, strlen('raya_at_test_'));
         foreach ([(string) $token, $printed] as $shown) {
             self::assertStringNotContainsString($secret, $shown);
         }
@@ -223,6 +421,29 @@ final class ObjectsTest extends TestCase
         self::assertInstanceOf(ConnectOrder::class, $object);
         self::assertSame(['succeeded', 500], [$object->status, $object->fee]);
         self::assertSame(ConnectOrder\Item::class, get_debug_type($object->items[0]));
+    }
+
+    /** Un evento de Identidad trae la verificación, siempre con person en null. */
+    public function testEventHydratesAnIdentityVerification(): void
+    {
+        $event = Event::constructFrom(Fixtures::EVENT_VERIFICATION_VERIFIED);
+        self::assertSame(Event::TYPE_IDENTITY_VERIFICATION_VERIFIED, $event->type);
+        self::assertSame('identity.verification.verified', $event->type);
+        $object = $event->data->object;
+        self::assertSame(IdentityVerification::class, get_debug_type($object));
+        self::assertInstanceOf(IdentityVerification::class, $object);
+        self::assertSame(IdentityVerification::STATUS_VERIFIED, $object->status);
+        self::assertNull($object->person);
+        self::assertSame(IdentityVerification\Checks::class, $object->checks::class);
+        // Un evento de la cuenta real.
+        self::assertTrue($event->livemode);
+        self::assertTrue($event['livemode']);
+        $canceled = Event::constructFrom(Fixtures::EVENT_VERIFICATION_CANCELED);
+        self::assertSame(Event::TYPE_IDENTITY_VERIFICATION_CANCELED, $canceled->type);
+        self::assertSame(
+            ['identity.verification.declined', 'identity.verification.expired'],
+            [Event::TYPE_IDENTITY_VERIFICATION_DECLINED, Event::TYPE_IDENTITY_VERIFICATION_EXPIRED],
+        );
     }
 
     public function testMetadataKeysCanShadowDictMethods(): void
@@ -495,6 +716,59 @@ final class ObjectsTest extends TestCase
             'data' => ['object' => ['object' => 'test']],
         ]);
         self::assertSame(RayaObject::class, $testEvent->data->object::class);
+    }
+
+    /**
+     * Un evento de un sandbox trae livemode en false, entre created_at y data (el orden del
+     * sobre); uno de la cuenta real, en true.
+     */
+    public function testEventLivemodeIsFalseInASandbox(): void
+    {
+        $event = Event::constructFrom(Fixtures::EVENT_SANDBOX_PAYMENT_SUCCEEDED);
+        self::assertFalse($event->livemode);
+        self::assertFalse($event['livemode']);
+        self::assertTrue(isset($event->livemode));
+        self::assertSame(
+            ['id', 'object', 'type', 'api_version', 'created_at', 'livemode', 'data'],
+            array_keys($event->toArray()),
+        );
+        self::assertSame(Event::TYPE_PAYMENT_SUCCEEDED, $event->type);
+        // El pago de prueba, con el CVU de prueba y el pagador de prueba.
+        $payment = $event->data->object;
+        self::assertInstanceOf(Payment::class, $payment);
+        self::assertSame(
+            ['succeeded', '0000000271940365218453', 'sandbox.no.transferir'],
+            [$payment->status, $payment->bank_transfer->cvu, $payment->bank_transfer->alias],
+        );
+        self::assertSame(Fixtures::SANDBOX_PAYER['name'], $payment->payer?->name);
+        self::assertStringStartsWith('https://raya.cash/sandbox/pay/', $payment->checkout_url);
+        // Uno de la cuenta real.
+        self::assertTrue(Event::constructFrom(Fixtures::EVENT_VERIFICATION_CANCELED)->livemode);
+    }
+
+    /**
+     * Un evento creado antes de que la API sumara livemode no lo trae si se reenvía (el body es
+     * el que se guardó): se arma igual, sin el campo, y es de la cuenta real.
+     */
+    public function testEventWithoutLivemodeStaysAsItCame(): void
+    {
+        self::assertArrayNotHasKey('livemode', Fixtures::EVENT_PAYMENT_SUCCEEDED);
+        $event = Event::constructFrom(Fixtures::EVENT_PAYMENT_SUCCEEDED);
+        self::assertFalse(isset($event->livemode));
+        self::assertTrue($event->livemode ?? true);
+        self::assertNull($event['livemode'] ?? null);
+        self::assertArrayNotHasKey('livemode', $event->toArray());
+        self::assertSame(
+            json_encode(Fixtures::EVENT_PAYMENT_SUCCEEDED, JSON_THROW_ON_ERROR),
+            json_encode($event, JSON_THROW_ON_ERROR),
+        );
+        // Leerlo sin ?? es leer un campo que no vino.
+        self::assertThrows(
+            \OutOfBoundsException::class,
+            static fn() => $event->livemode,
+            "Event no tiene el campo 'livemode'.",
+        );
+        self::assertInstanceOf(Payment::class, $event->data->object);
     }
 
     public function testListObjectIteratesItsData(): void

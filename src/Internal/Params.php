@@ -31,8 +31,9 @@ final class Params
      * PHP descarta en silencio los argumentos de más: retrieve($id, [], $opciones) mandaría la
      * request sin esas opciones (por ejemplo, con la clave de otra cuenta). Acá fallan.
      *
-     * @param array{string}|array{string, string} $names Los del método, con options al final:
-     *     ningún método tiene más de dos.
+     * @param array{string}|array{string, string}|array{string, string, string} $names Los del
+     *     método, con options al final: ninguno tiene más de tres (el test helper del sandbox:
+     *     paymentId, params y opts).
      */
     public static function arguments(string $method, int $given, array $names): void
     {
@@ -40,9 +41,11 @@ final class Params
         if ($given <= $count) {
             return;
         }
-        [$noun, $position] = $count === 1
-            ? ['argumento', 'el primero']
-            : ['argumentos', 'el segundo'];
+        [$noun, $position] = match ($count) {
+            1 => ['argumento', 'el primero'],
+            2 => ['argumentos', 'el segundo'],
+            default => ['argumentos', 'el tercero'],
+        };
         throw self::withoutArguments(new \ArgumentCountError(sprintf(
             "%s recibe %d %s (%s), no %d: las opciones van en %s, como ['api_key' => …].",
             $method,
@@ -119,12 +122,14 @@ final class Params
     /**
      * Saca de la traza los argumentos de las llamadas al SDK: un argumento de más o una opción
      * puesta entre los parámetros pueden traer la clave, y #[\SensitiveParameter] no los cubre.
+     * Lo usan también los servicios que rechazan algo propio entre los parámetros (el test helper
+     * del sandbox, una idempotency_key).
      *
      * @template T of \Error
      * @param T $error
      * @return T
      */
-    private static function withoutArguments(\Error $error): \Error
+    public static function withoutArguments(\Error $error): \Error
     {
         // El namespace del SDK sale del de esta clase («RayaCash\»), no de un string: PHP-Scoper
         // y Strauss (un plugin de WordPress que lo trae prefijado) cambian los namespaces, pero
