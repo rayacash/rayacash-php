@@ -22,6 +22,7 @@ use RayaCash\Service\ConnectService;
 use RayaCash\Service\IdentityService;
 use RayaCash\Service\OAuthService;
 use RayaCash\Service\PaymentService;
+use RayaCash\Service\PspService;
 use RayaCash\Service\SandboxHelpersService;
 use RayaCash\Service\TransferService;
 use RayaCash\Service\UserService;
@@ -43,6 +44,9 @@ use RayaCash\Service\UserService;
  * `$connected->connect->orders`. Los payouts (`$client->connect->payouts`), que salen de tu
  * saldo, van con tu clave secreta, como el resto de la API. `$client->oauth->token()` no necesita
  * clave.
+ *
+ * Si tu cuenta de empresa tiene Raya PSP activado, `$client->psp` les da a tus clientes una
+ * cuenta con un CVU a su nombre y transfiere en su nombre, con tu clave secreta.
  *
  * En un sandbox, el cliente va con su clave secreta de prueba (raya_sk_test_…) y la misma
  * api_base: la clave decide el entorno. `$client->testHelpers` solo funciona ahí.
@@ -87,6 +91,13 @@ class RayaClient
      * RENAPER), con tu clave secreta.
      */
     public readonly IdentityService $identity;
+
+    /**
+     * Raya PSP: `customers` les da a los clientes de tu empresa una cuenta con un CVU a su nombre,
+     * `transfers` transfiere en su nombre y `balance` da tu saldo y el de tus clientes, con tu
+     * clave secreta.
+     */
+    public readonly PspService $psp;
 
     /**
      * Lo que solo existe en un sandbox, con su clave secreta de prueba (raya_sk_test_…):
@@ -233,6 +244,7 @@ class RayaClient
         // @phpstan-ignore assign.propertyType
         $this->checkout = $this->connect;
         $this->identity = new IdentityService($this->requestor);
+        $this->psp = new PspService($this->requestor);
         $this->testHelpers = new SandboxHelpersService($this->requestor);
     }
 

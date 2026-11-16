@@ -28,6 +28,10 @@ use RayaCash\HttpClient\Response;
 use RayaCash\IdentityVerification;
 use RayaCash\OAuth;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspDocumentRequest;
+use RayaCash\PspTransfer;
 use RayaCash\RayaCash;
 use RayaCash\RayaClient;
 use RayaCash\RayaObject;
@@ -246,6 +250,167 @@ function identityVerifications(RayaClient $client): void
     }
 }
 
+/** Raya PSP: los clientes de tu empresa, sus transferencias y el saldo, con tu clave secreta. */
+function rayaPsp(RayaClient $client, \Stringable $decimal): void
+{
+    assertType('RayaCash\Service\PspService', $client->psp);
+    assertType('RayaCash\Service\PspCustomerService', $client->psp->customers);
+    assertType('RayaCash\Service\PspTransferService', $client->psp->transfers);
+    assertType('RayaCash\Service\PspBalanceService', $client->psp->balance);
+    // Con Raya Identity, solo identity_verification: los datos salen de la verificación.
+    $pspCustomer = $client->psp->customers->create(
+        [
+            'identity_verification' => 'idv_3kT9vQ2mXw7Lp0aBcD4eF6gH',
+            'external_reference' => 'cliente-8812',
+            'metadata' => ['plan' => 'pro'],
+        ],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\PspCustomer', $pspCustomer);
+    assertType('RayaCash\RayaResponse|null', $pspCustomer->getLastResponse());
+    assertType("'psp.customer'", $pspCustomer->object);
+    assertType("'psp.customer'", PspCustomer::OBJECT_NAME);
+    assertType(
+        "'active'|'blocked'|'closed'|'failed'|'pending'|'rejected'|'verifying'",
+        $pspCustomer->status,
+    );
+    assertType("'active'", PspCustomer::STATUS_ACTIVE);
+    assertType("'F'|'J'", $pspCustomer->person_type);
+    assertType("'J'", PspCustomer::PERSON_TYPE_J);
+    assertType('string', $pspCustomer->tax_id);
+    assertType('float|int', $pspCustomer->balance);
+    assertType('RayaCash\PspCustomer\Cvu|null', $pspCustomer->cvu);
+    assertType('string|null', $pspCustomer->cvu?->alias);
+    assertType("'active'|'closed'|'closing'|null", $pspCustomer->cvu?->status);
+    assertType("'account'|'raya'|null", $pspCustomer->blocked_by);
+    assertType('string|null', $pspCustomer->identity_verification);
+    assertType('RayaCash\PspCustomer\DeclineReason|null', $pspCustomer->decline_reason);
+    assertType(
+        "'bank_rejected'|'document_mismatch'|'document_sides_mismatch'|'document_unreadable'"
+        . "|'face_mismatch'|'identity_not_verified'|'image_invalid'|'image_unavailable'"
+        . "|'name_mismatch'|'not_approved'|'psp_disabled'|'selfie_invalid'"
+        . "|'verification_unavailable'|null",
+        $pspCustomer->decline_reason?->code,
+    );
+    assertType('array<string>', $pspCustomer->metadata);
+    assertType('string', $pspCustomer->created_at);
+    // Sin Raya Identity: una persona humana con las fotos (sin gender: el sexo sale del DNI) y
+    // una persona jurídica, sin fotos. Los null valen como «no lo mando».
+    assertType(
+        'RayaCash\PspCustomer',
+        $client->psp->customers->create([
+            'tax_id' => '27123456781',
+            'name' => 'María Laura Ejemplo',
+            'person_type' => PspCustomer::PERSON_TYPE_F,
+            'document_front_url' => 'https://archivos.example.com/kyc/frente.jpg',
+            'document_back_url' => 'https://archivos.example.com/kyc/dorso.jpg',
+            'selfie_url' => 'https://archivos.example.com/kyc/selfie.jpg',
+            'external_reference' => 'cliente-8812',
+        ]),
+    );
+    assertType(
+        'RayaCash\PspCustomer',
+        $client->psp->customers->create(
+            ['tax_id' => '30712345672', 'name' => 'Ejemplo S. A.', 'person_type' => 'J'],
+        ),
+    );
+    assertType(
+        'RayaCash\PspCustomer',
+        $client->psp->customers->create([
+            'identity_verification' => null,
+            'tax_id' => '30712345672',
+            'name' => 'Ejemplo S. A.',
+            'person_type' => 'J',
+            'selfie_url' => null,
+            'metadata' => (object) ['plan' => 'pro'],
+        ]),
+    );
+    assertType(
+        'RayaCash\PspCustomer',
+        $client->psp->customers->create(['identity_verification' => 'idv_x', 'tax_id' => null]),
+    );
+    assertType('RayaCash\PspCustomer', $client->psp->customers->retrieve('pspc_x'));
+    $page = $client->psp->customers->list([
+        'status' => 'active',
+        'external_reference' => 'cliente-8812',
+        'created_gte' => new \DateTimeImmutable(),
+        'created_lt' => '2026-11-11T00:00:00Z',
+        'limit' => 100,
+        'cursor' => 'c',
+    ]);
+    assertType('RayaCash\ListObject<RayaCash\PspCustomer>', $page);
+    assertType('list<RayaCash\PspCustomer>', $page->data);
+    foreach ($page->autoPagingIter() as $item) {
+        assertType('RayaCash\PspCustomer', $item);
+    }
+    $customerBalance = $client->psp->customers->retrieveBalance('pspc_x');
+    assertType('RayaCash\PspCustomerBalance', $customerBalance);
+    assertType("'psp.customer_balance'", $customerBalance->object);
+    assertType('string', $customerBalance->customer);
+    assertType('float|int', $customerBalance->available);
+    assertType('float|int', $customerBalance->transferable);
+    // Las acciones, por el servicio y desde el cliente.
+    assertType('RayaCash\PspCustomer', $client->psp->customers->block('pspc_x'));
+    assertType('RayaCash\PspCustomer', $client->psp->customers->unblock('pspc_x'));
+    assertType(
+        'RayaCash\PspCustomer',
+        $client->psp->customers->close('pspc_x', ['idempotency_key' => 'c']),
+    );
+    assertType('RayaCash\PspCustomer', $client->psp->customers->recreate('pspc_x'));
+    assertType('RayaCash\PspCustomer', $pspCustomer->block());
+    assertType('RayaCash\PspCustomer', $pspCustomer->unblock(['idempotency_key' => 'u']));
+    assertType('RayaCash\PspCustomer', $pspCustomer->close());
+    assertType('RayaCash\PspCustomer', $pspCustomer->recreate());
+
+    $pspTransfer = $client->psp->transfers->create(
+        ['customer' => 'pspc_x', 'amount' => $decimal, 'destination' => '0000123380736153041182'],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\PspTransfer', $pspTransfer);
+    assertType("'psp.transfer'", $pspTransfer->object);
+    assertType('string', $pspTransfer->customer);
+    assertType("'inbound'|'outbound'", $pspTransfer->direction);
+    assertType("'completed'|'failed'|'pending'|'reversed'", $pspTransfer->status);
+    assertType("'reversed'", PspTransfer::STATUS_REVERSED);
+    assertType('float|int', $pspTransfer->amount);
+    assertType('float|int', $pspTransfer->fee);
+    assertType('float|int', $pspTransfer->net_amount);
+    assertType('string', $pspTransfer->account);
+    assertType('RayaCash\PspTransfer\Counterparty', $pspTransfer->counterparty);
+    assertType('string|null', $pspTransfer->counterparty->name);
+    assertType('string|null', $pspTransfer->description);
+    assertType('string|null', $pspTransfer->reference);
+    assertType('RayaCash\PspTransfer', $client->psp->transfers->retrieve('pspt_x'));
+    $transfers = $client->psp->transfers->list([
+        'customer' => 'pspc_x',
+        'direction' => 'inbound',
+        'status' => 'completed',
+        'created_gte' => new \DateTimeImmutable(),
+        'limit' => 100,
+    ]);
+    assertType('RayaCash\ListObject<RayaCash\PspTransfer>', $transfers);
+    foreach ($transfers->autoPagingIter() as $item) {
+        assertType('RayaCash\PspTransfer', $item);
+    }
+    $pspBalance = $client->psp->balance->retrieve();
+    assertType('RayaCash\PspBalance', $pspBalance);
+    assertType("'psp.balance'", $pspBalance->object);
+    assertType('float|int', $pspBalance->available);
+    assertType('float|int', $pspBalance->customers_balance);
+
+    // En los webhooks, el objeto sale con instanceof.
+    $object = $client->constructEvent('{}', 't=1,v1=x', 'whsec_x')->data->object;
+    if ($object instanceof PspCustomer) {
+        assertType('RayaCash\PspCustomer', $object);
+    } elseif ($object instanceof PspTransfer) {
+        assertType('RayaCash\PspTransfer', $object);
+    } elseif ($object instanceof PspDocumentRequest) {
+        assertType("'closed'|'open'|'submitted'", $object->status);
+        assertType('string', $object->customer);
+        assertType('string|null', $object->closed_at);
+    }
+}
+
 /**
  * Un sandbox, con su clave secreta de prueba: el test helper devuelve un Payment o un
  * ConnectOrder (según el id), y los eventos traen livemode.
@@ -412,6 +577,47 @@ function globalStyle(): void
         'RayaCash\IdentityVerification',
         IdentityVerification::constructFrom(['object' => 'identity.verification']),
     );
+    // Raya PSP, con la clave secreta global. Por id, las acciones son blockById(),
+    // unblockById(), closeById() y recreateById().
+    $pspCustomer = PspCustomer::create(
+        ['identity_verification' => 'idv_3kT9vQ2mXw7Lp0aBcD4eF6gH'],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\PspCustomer', $pspCustomer);
+    // Las mismas tres formas que $client->psp->customers->create().
+    assertType(
+        'RayaCash\PspCustomer',
+        PspCustomer::create([
+            'tax_id' => '27123456781',
+            'name' => 'María Laura Ejemplo',
+            'person_type' => 'F',
+            'document_front_url' => 'https://archivos.example.com/kyc/frente.jpg',
+            'document_back_url' => 'https://archivos.example.com/kyc/dorso.jpg',
+            'selfie_url' => 'https://archivos.example.com/kyc/selfie.jpg',
+        ]),
+    );
+    assertType(
+        'RayaCash\PspCustomer',
+        PspCustomer::create(['tax_id' => '30712345672', 'name' => 'x', 'person_type' => 'J']),
+    );
+    assertType('RayaCash\PspCustomer', $pspCustomer->block());
+    assertType('RayaCash\PspCustomer', PspCustomer::retrieve('id'));
+    assertType('RayaCash\ListObject<RayaCash\PspCustomer>', PspCustomer::list());
+    assertType('RayaCash\PspCustomerBalance', PspCustomer::retrieveBalance('id'));
+    assertType('RayaCash\PspCustomer', PspCustomer::blockById('id'));
+    assertType('RayaCash\PspCustomer', PspCustomer::unblockById('id'));
+    assertType('RayaCash\PspCustomer', PspCustomer::closeById('id'));
+    assertType('RayaCash\PspCustomer', PspCustomer::recreateById('id'));
+    assertType(
+        'RayaCash\PspTransfer',
+        PspTransfer::create(
+            ['customer' => 'pspc_x', 'amount' => 18350.5, 'destination' => 'proveedor.ejemplo'],
+            ['idempotency_key' => 'k'],
+        ),
+    );
+    assertType('RayaCash\PspTransfer', PspTransfer::retrieve('id'));
+    assertType('RayaCash\ListObject<RayaCash\PspTransfer>', PspTransfer::list());
+    assertType('RayaCash\PspBalance', PspBalance::retrieve());
 }
 
 /**
@@ -600,7 +806,11 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
         . "|'connect.order.succeeded'|'identity.verification.canceled'"
         . "|'identity.verification.declined'|'identity.verification.expired'"
         . "|'identity.verification.verified'|'payment.created'|'payment.failed'"
-        . "|'payment.refunded'|'payment.succeeded'|'transfer.failed'|'transfer.received'"
+        . "|'payment.refunded'|'payment.succeeded'|'psp.customer.activated'"
+        . "|'psp.customer.blocked'|'psp.customer.closed'|'psp.customer.failed'"
+        . "|'psp.customer.rejected'|'psp.customer.unblocked'|'psp.customer.updated'"
+        . "|'psp.document_request.closed'|'psp.document_request.created'|'psp.transfer.failed'"
+        . "|'psp.transfer.received'|'psp.transfer.sent'|'transfer.failed'|'transfer.received'"
         . "|'transfer.sent'|'webhook.test'",
         $event->type,
     );
@@ -609,6 +819,11 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
     assertType(
         "'identity.verification.verified'",
         Event::TYPE_IDENTITY_VERIFICATION_VERIFIED,
+    );
+    assertType("'psp.transfer.received'", Event::TYPE_PSP_TRANSFER_RECEIVED);
+    assertType(
+        "'psp.document_request.closed'",
+        Event::TYPE_PSP_DOCUMENT_REQUEST_CLOSED,
     );
     assertType('string', $balance->currency);
     // Lo que no tiene tipo en la doc, por nombre: mixed (un campo nuevo de la API, por ejemplo).

@@ -11,7 +11,8 @@ declare(strict_types=1);
 // Lo que PHPStan no ve lo frena el SDK al llamar, antes de mandar nada:
 // - la idempotency_key entre los parámetros, en un GET o en camelCase (los dos @ts-expect-error
 //   de Node que no tienen par): las formas de array de PHPStan aceptan claves de más;
-// - una opción desconocida de RayaClient, por lo mismo;
+// - una opción desconocida de RayaClient, o un parámetro que no es de la API (como gender en
+//   psp->customers->create, que ya no existe), por lo mismo;
 // - los argumentos de más, como retrieve($id, [], $opciones): func_num_args() vuelve variádicos
 //   a esos métodos para PHPStan;
 // - un bool en RayaCash::setTimeout() o setMaxNetworkRetries(), y un float (1.5) en
@@ -25,6 +26,7 @@ use RayaCash\Checkout;
 use RayaCash\ConnectOrder;
 use RayaCash\IdentityVerification;
 use RayaCash\Payment;
+use RayaCash\PspCustomer;
 use RayaCash\RayaClient;
 use RayaCash\Webhook;
 
@@ -151,6 +153,71 @@ function expectErrors(RayaClient $client, Payment $payment, ?string $header, str
     // …y el id es un string.
     // error: argument.type: Parameter #1 $paymentId
     Payment::simulateTransfer(1042);
+
+    // Raya PSP: la idempotency_key es obligatoria en psp->transfers->create, como en las
+    // transferencias: sin las opciones…
+    // error: arguments.count: PspTransferService::create() invoked with 1 parameter
+    $client->psp->transfers->create(['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x']);
+
+    // …o con las opciones, pero sin la clave.
+    // error: argument.type: Parameter #2 $options
+    $client->psp->transfers->create(['customer' => 'c', 'amount' => 1, 'destination' => 'x'], []);
+
+    // customer, el id del cliente, va como string.
+    // error: argument.type: Parameter #1 $params
+    $client->psp->transfers->create(['customer' => 1, 'amount' => 1, 'destination' => 'x'], $key);
+
+    // Crear un cliente tiene tres formas. Con Raya Identity va solo identity_verification: el
+    // CUIL, el nombre y el tipo de persona salen de la verificación…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['identity_verification' => 'idv_x', 'tax_id' => '1']);
+
+    // …y las fotos tampoco van…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['identity_verification' => 'idv_x', 'selfie_url' => 'x']);
+
+    // …e identity_verification es el id, un string (no la IdentityVerification entera).
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['identity_verification' => 8812]);
+
+    // Sin Raya Identity, tax_id va como string: el CUIL o CUIT, sin guiones…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['tax_id' => 30712345672, 'name' => 'x', 'person_type' => 'J']);
+
+    // …name y person_type son obligatorios…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['tax_id' => '27123456781']);
+
+    // …person_type es F o J…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['tax_id' => '1', 'name' => 'x', 'person_type' => 'H']);
+
+    // …una persona humana lleva las tres fotos…
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create(['tax_id' => '1', 'name' => 'x', 'person_type' => 'F']);
+
+    // …y una persona jurídica, ninguna.
+    $company = ['tax_id' => '30712345672', 'name' => 'Ejemplo S. A.', 'person_type' => 'J'];
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create([...$company, 'document_front_url' => 'https://x']);
+
+    // Sin nada no hay forma.
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->create([]);
+
+    // PspCustomer::create() (estilo global) tiene el mismo tipo: tampoco mezcla las formas.
+    // error: argument.type: Parameter #1 $params
+    PspCustomer::create(['identity_verification' => 'idv_x', 'name' => 'x']);
+
+    // Los filtros de la lista son los de la API: open no es un estado de un cliente.
+    // error: argument.type: Parameter #1 $params
+    $client->psp->customers->list(['status' => 'open']);
+
+    // Por id, con el estilo global, es PspCustomer::blockById(): block() es del cliente que ya
+    // tenés.
+    // error: method.staticCall: RayaCash\PspCustomer::block()
+    // error: argument.type: Parameter #1 $options
+    PspCustomer::block('pspc_x');
 
     // Los nombres de la 1.1.0 (alias deprecados) piden lo mismo que los nuevos: fee es un monto…
     // error: argument.type: Parameter #1 $params

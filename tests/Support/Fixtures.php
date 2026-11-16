@@ -491,6 +491,293 @@ final class Fixtures
         'data' => ['object' => self::VERIFICATION_CANCELED],
     ];
 
+    // --- Raya PSP (api.md › Raya PSP) -------------------------------------------------------
+
+    // Los objetos de ejemplo de raya.cash/api/psp (API_REFERENCE_PSP_EXAMPLES y
+    // API_REFERENCE_PSP_DEMO de raya-web), los de tests/fixtures_psp.py de rayacash-python: el
+    // CUIL y el CUIT con el dígito verificador inválido, el alias con guion bajo (un alias real no
+    // lo admite) y los CVU de demoCvu() de raya-web, con los verificadores alterados. Los montos
+    // no dejan deducir ninguna comisión. Los estados que la referencia no muestra (pending,
+    // rejected, failed, una transferencia fallida, un pedido cerrado) salen de los mismos objetos.
+    public const PSP_CUSTOMER_ID = 'pspc_7Hq2Lm9Xw4Tz1Bv8Nc3Kd6Rf';
+    public const PSP_COMPANY_ID = 'pspc_5Ns1Ve8Jt3Wd0Hx6Pq9Bk2Gm';
+    public const PSP_OUTBOUND_ID = 'pspt_4Wm8Qd2Zr6Yk0Ps3Hj7Ln1Cx';
+    public const PSP_INBOUND_ID = 'pspt_9Bf5Tn2Gv8Xc4Mr0Ka6Wq3Ez';
+    public const PSP_DOCUMENT_REQUEST_ID = 'pspd_2Kx7Rb4Np9Va1Dm6Ys3Lh8Qt';
+    // demoCvu('api-reference-psp-cliente'), demoCvu('api-reference-psp-empresa') y
+    // demoCvu('api-reference-psp-cliente-nuevo').
+    public const PSP_ACCOUNT = '0000123300537571545575';
+    public const PSP_COMPANY_ACCOUNT = '0000123300557880122458';
+    public const PSP_RECREATED_ACCOUNT = '0000123337002711594589';
+    // Las fotos de crear un cliente sin Raya Identity (con tu propio KYC): las del body «con las
+    // fotos» de raya.cash/api/psp, como PHOTO_URLS en tests/fixtures_psp.py.
+    public const PSP_PHOTO_URLS = [
+        'document_front_url' => 'https://archivos.example.com/kyc/frente.jpg?firma=ejemplo',
+        'document_back_url' => 'https://archivos.example.com/kyc/dorso.jpg?firma=ejemplo',
+        'selfie_url' => 'https://archivos.example.com/kyc/selfie.jpg?firma=ejemplo',
+    ];
+
+    private const PSP_CVU = [
+        'account' => self::PSP_ACCOUNT,
+        'alias' => 'maria_ejemplo',
+        'holder_name' => 'MARIA LAURA EJEMPLO',
+        'status' => 'active',
+        'created_at' => '2026-10-24T11:02:16Z',
+        'closed_at' => null,
+    ];
+
+    // La persona humana de los ejemplos después de sus dos movimientos: recibió 42000 y le
+    // transferiste 18350.5 en su nombre (42000 - 18350.5 = 23649.5).
+    public const PSP_CUSTOMER_ACTIVE = [
+        'id' => self::PSP_CUSTOMER_ID,
+        'object' => 'psp.customer',
+        'status' => 'active',
+        'person_type' => 'F',
+        'tax_id' => '27123456781',
+        'name' => 'María Laura Ejemplo',
+        'balance' => 23649.5,
+        'currency' => 'ARS',
+        'cvu' => self::PSP_CVU,
+        'blocked_by' => null,
+        'identity_verification' => self::VERIFICATION_ID,
+        'decline_reason' => null,
+        'external_reference' => 'cliente-8812',
+        'metadata' => ['plan' => 'pro'],
+        'created_at' => '2026-10-24T11:02:14Z',
+    ];
+
+    // La respuesta de crear un cliente con una verificación de Identidad: 201, con su CVU y su
+    // alias y sin saldo.
+    public const PSP_CUSTOMER_CREATED = [...self::PSP_CUSTOMER_ACTIVE, 'balance' => 0];
+
+    // 202: creando su CVU (todavía sin número).
+    public const PSP_CUSTOMER_PENDING = [
+        ...self::PSP_CUSTOMER_CREATED,
+        'status' => 'pending',
+        'cvu' => null,
+    ];
+
+    // 202: con las fotos, mientras validamos su identidad.
+    public const PSP_CUSTOMER_VERIFYING = [
+        ...self::PSP_CUSTOMER_CREATED,
+        'status' => 'verifying',
+        'cvu' => null,
+        'identity_verification' => null,
+        'metadata' => [],
+    ];
+
+    public const PSP_CUSTOMER_REJECTED = [
+        ...self::PSP_CUSTOMER_VERIFYING,
+        'status' => 'rejected',
+        'decline_reason' => [
+            'code' => 'face_mismatch',
+            'message' => 'No pudimos confirmar que la selfie sea de la misma persona del DNI.',
+        ],
+    ];
+
+    public const PSP_CUSTOMER_FAILED = [
+        ...self::PSP_CUSTOMER_PENDING,
+        'status' => 'failed',
+        'decline_reason' => [
+            'code' => 'bank_rejected',
+            'message' => 'El banco rechazó el alta del CVU. Podés volver a intentarlo con recrear.',
+        ],
+    ];
+
+    public const PSP_CUSTOMER_BLOCKED = [
+        ...self::PSP_CUSTOMER_ACTIVE,
+        'status' => 'blocked',
+        'blocked_by' => 'account',
+    ];
+
+    // Con el CVU dado de baja: queda closing hasta que el banco confirma la baja, y el cliente
+    // conserva su saldo.
+    public const PSP_CUSTOMER_CLOSED = [
+        ...self::PSP_CUSTOMER_ACTIVE,
+        'status' => 'closed',
+        'cvu' => [...self::PSP_CVU, 'status' => 'closing', 'closed_at' => '2026-10-24T16:40:03Z'],
+    ];
+
+    // Recreado: el mismo id y el mismo saldo, con un CVU y un alias nuevos.
+    public const PSP_CUSTOMER_RECREATED = [
+        ...self::PSP_CUSTOMER_ACTIVE,
+        'cvu' => [
+            ...self::PSP_CVU,
+            'account' => self::PSP_RECREATED_ACCOUNT,
+            'alias' => 'maria_ejemplo_nuevo',
+            'created_at' => '2026-10-24T17:15:42Z',
+        ],
+    ];
+
+    // La persona jurídica del listado, ya revisada (23649.5 + 489225.75 = 512875.25, el
+    // customers_balance de PSP_BALANCE).
+    public const PSP_COMPANY = [
+        ...self::PSP_CUSTOMER_ACTIVE,
+        'id' => self::PSP_COMPANY_ID,
+        'person_type' => 'J',
+        'tax_id' => '30712345672',
+        'name' => 'Distribuidora Ejemplo S. A.',
+        'balance' => 489225.75,
+        'cvu' => [
+            ...self::PSP_CVU,
+            'account' => self::PSP_COMPANY_ACCOUNT,
+            'alias' => 'distri_ejemplo',
+            'holder_name' => 'DISTRIBUIDORA EJEMPLO S. A.',
+            'created_at' => '2026-10-24T15:20:31Z',
+        ],
+        'identity_verification' => null,
+        'external_reference' => 'cliente-8813',
+        'metadata' => [],
+        'created_at' => '2026-10-24T13:41:09Z',
+    ];
+
+    // La misma empresa recién creada: sin prueba biométrica y en revisión (202 verifying).
+    public const PSP_COMPANY_VERIFYING = [
+        ...self::PSP_COMPANY,
+        'status' => 'verifying',
+        'balance' => 0,
+        'cvu' => null,
+    ];
+
+    public const PSP_CUSTOMER_LIST = [
+        'object' => 'list',
+        'data' => [self::PSP_COMPANY, self::PSP_CUSTOMER_ACTIVE],
+        'has_more' => false,
+        'next_cursor' => null,
+    ];
+
+    public const PSP_CUSTOMER_BALANCE = [
+        'object' => 'psp.customer_balance',
+        'customer' => self::PSP_CUSTOMER_ID,
+        'available' => 23649.5,
+        'transferable' => 23649.5,
+        'currency' => 'ARS',
+    ];
+
+    public const PSP_BALANCE = [
+        'object' => 'psp.balance',
+        'available' => 640200.5,
+        'customers_balance' => 512875.25,
+        'currency' => 'ARS',
+    ];
+
+    // Enviada en su nombre a otra entidad: 18350.5 bajan de su saldo, 61.37 de comisión salen del
+    // tuyo y el destino recibe 18289.13 (a propósito, no es un porcentaje redondo del monto).
+    public const PSP_TRANSFER_OUTBOUND_PENDING = [
+        'id' => self::PSP_OUTBOUND_ID,
+        'object' => 'psp.transfer',
+        'customer' => self::PSP_CUSTOMER_ID,
+        'direction' => 'outbound',
+        'status' => 'pending',
+        'amount' => 18350.5,
+        'fee' => 61.37,
+        'net_amount' => 18289.13,
+        'currency' => 'ARS',
+        'account' => self::PSP_ACCOUNT,
+        'counterparty' => [
+            'name' => 'Proveedora Ejemplo S. A.',
+            'tax_id' => '30123456782',
+            'account' => '0000123380736153041182',
+            'alias' => 'proveedor.ejemplo',
+        ],
+        'description' => 'Transferencia',
+        'reference' => null,
+        'created_at' => '2026-10-24T14:30:05Z',
+    ];
+
+    public const PSP_TRANSFER_OUTBOUND_COMPLETED = [
+        ...self::PSP_TRANSFER_OUTBOUND_PENDING,
+        'status' => 'completed',
+        'reference' => 'P3W7K1N9X5Q2T8R4V6Z0MC',
+    ];
+
+    public const PSP_TRANSFER_FAILED = [
+        ...self::PSP_TRANSFER_OUTBOUND_PENDING,
+        'status' => 'failed',
+    ];
+
+    // Recibida desde otra entidad: description es la del aviso del banco.
+    public const PSP_TRANSFER_INBOUND = [
+        'id' => self::PSP_INBOUND_ID,
+        'object' => 'psp.transfer',
+        'customer' => self::PSP_CUSTOMER_ID,
+        'direction' => 'inbound',
+        'status' => 'completed',
+        'amount' => 42000,
+        'fee' => 133.9,
+        'net_amount' => 41866.1,
+        'currency' => 'ARS',
+        'account' => self::PSP_ACCOUNT,
+        'counterparty' => [
+            'name' => 'Juan Ejemplo',
+            'tax_id' => '20123456785',
+            'account' => '0000123319112992888845',
+            'alias' => null,
+        ],
+        'description' => 'Varios',
+        'reference' => 'H6T2Y9P4W1K7N3X8Q5R0ZB',
+        'created_at' => '2026-10-24T12:05:47Z',
+    ];
+
+    public const PSP_TRANSFER_LIST = [
+        'object' => 'list',
+        'data' => [self::PSP_TRANSFER_OUTBOUND_COMPLETED, self::PSP_TRANSFER_INBOUND],
+        'has_more' => false,
+        'next_cursor' => null,
+    ];
+
+    // Solo llega en los webhooks: no tiene endpoint.
+    public const PSP_DOCUMENT_REQUEST = [
+        'id' => self::PSP_DOCUMENT_REQUEST_ID,
+        'object' => 'psp.document_request',
+        'customer' => self::PSP_CUSTOMER_ID,
+        'status' => 'open',
+        'subject' => 'Origen de los fondos',
+        'message' => 'Necesitamos un comprobante del origen de la transferencia que recibió este '
+            . 'cliente el 24 de octubre, como una factura o un recibo.',
+        'created_at' => '2026-10-24T18:20:00Z',
+        'submitted_at' => null,
+        'closed_at' => null,
+    ];
+
+    public const PSP_DOCUMENT_REQUEST_CLOSED = [
+        ...self::PSP_DOCUMENT_REQUEST,
+        'status' => 'closed',
+        'submitted_at' => '2026-10-25T10:15:00Z',
+        'closed_at' => '2026-10-26T09:00:00Z',
+    ];
+
+    // El de la referencia (Eventos de Raya PSP): un cliente recibió una transferencia.
+    public const EVENT_PSP_TRANSFER_RECEIVED = [
+        'id' => 'evt_2Hn8Wq5Tz1Kc7Vb4Xm9Rd3Lp',
+        'object' => 'event',
+        'type' => 'psp.transfer.received',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-10-24T12:05:47Z',
+        'livemode' => true,
+        'data' => ['object' => self::PSP_TRANSFER_INBOUND],
+    ];
+
+    public const EVENT_PSP_CUSTOMER_ACTIVATED = [
+        'id' => 'evt_5pR8vN2kX7mQ1tW4zC9bH6jL',
+        'object' => 'event',
+        'type' => 'psp.customer.activated',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-10-24T11:02:16Z',
+        'livemode' => true,
+        'data' => ['object' => self::PSP_CUSTOMER_CREATED],
+    ];
+
+    public const EVENT_PSP_DOCUMENT_REQUEST_CREATED = [
+        'id' => 'evt_3mJ9tR5vW2kP8xN1cQ6zL4bY',
+        'object' => 'event',
+        'type' => 'psp.document_request.created',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-10-24T18:20:00Z',
+        'livemode' => true,
+        'data' => ['object' => self::PSP_DOCUMENT_REQUEST],
+    ];
+
     // --- Sandbox (api.md › Sandbox) ---------------------------------------------------------
 
     // Los de tests/fixtures_sandbox.py de rayacash-python: la forma de las respuestas reales de
@@ -653,6 +940,55 @@ final class Fixtures
             'object' => 'list',
             'data' => array_map(
                 static fn(string $id): array => [...self::VERIFICATION_VERIFIED, 'id' => $id],
+                $ids,
+            ),
+            'has_more' => $nextCursor !== null,
+            'next_cursor' => $nextCursor,
+        ];
+    }
+
+    /**
+     * Una página de clientes de Raya PSP (copias de PSP_CUSTOMER_ACTIVE con esos ids).
+     *
+     * @param list<string> $ids
+     * @return array{
+     *     object: 'list',
+     *     data: list<array<string, mixed>>,
+     *     has_more: bool,
+     *     next_cursor: string|null,
+     * }
+     */
+    public static function pspCustomerPage(array $ids, ?string $nextCursor): array
+    {
+        return [
+            'object' => 'list',
+            'data' => array_map(
+                static fn(string $id): array => [...self::PSP_CUSTOMER_ACTIVE, 'id' => $id],
+                $ids,
+            ),
+            'has_more' => $nextCursor !== null,
+            'next_cursor' => $nextCursor,
+        ];
+    }
+
+    /**
+     * Una página de transferencias de clientes de Raya PSP (copias de PSP_TRANSFER_INBOUND con
+     * esos ids).
+     *
+     * @param list<string> $ids
+     * @return array{
+     *     object: 'list',
+     *     data: list<array<string, mixed>>,
+     *     has_more: bool,
+     *     next_cursor: string|null,
+     * }
+     */
+    public static function pspTransferPage(array $ids, ?string $nextCursor): array
+    {
+        return [
+            'object' => 'list',
+            'data' => array_map(
+                static fn(string $id): array => [...self::PSP_TRANSFER_INBOUND, 'id' => $id],
                 $ids,
             ),
             'has_more' => $nextCursor !== null,

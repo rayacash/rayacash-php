@@ -126,8 +126,9 @@ final class DeprecatedTest extends TestCase
             self::assertTrue(class_exists($name) || interface_exists($name), $name);
         }
         // Lo nuevo de src/ (sin Internal\) son las clases de Raya Connect (las que reemplazan a
-        // los nombres viejos y las de los payouts, que son nuevas, sin alias), las de Identidad y
-        // los dos servicios de los test helpers del sandbox, nada más.
+        // los nombres viejos y las de los payouts, que son nuevas, sin alias), las de Identidad,
+        // los dos servicios de los test helpers del sandbox (1.2.0) y las de Raya PSP (1.3.0),
+        // nada más.
         $new = array_values(array_diff(self::publicClassesInSrc(), self::PUBLIC_1_1_0));
         $expected = [
             ...array_values(self::ALIASES),
@@ -151,6 +152,18 @@ final class DeprecatedTest extends TestCase
             'RayaCash\Service\IdentityVerificationService',
             'RayaCash\Service\SandboxHelpersService',
             'RayaCash\Service\SandboxPaymentHelpersService',
+            'RayaCash\PspBalance',
+            'RayaCash\PspCustomer',
+            'RayaCash\PspCustomer\Cvu',
+            'RayaCash\PspCustomer\DeclineReason',
+            'RayaCash\PspCustomerBalance',
+            'RayaCash\PspDocumentRequest',
+            'RayaCash\PspTransfer',
+            'RayaCash\PspTransfer\Counterparty',
+            'RayaCash\Service\PspBalanceService',
+            'RayaCash\Service\PspCustomerService',
+            'RayaCash\Service\PspService',
+            'RayaCash\Service\PspTransferService',
         ];
         sort($expected);
         self::assertSame($expected, $new);

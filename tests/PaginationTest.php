@@ -6,6 +6,8 @@ namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use RayaCash\ListObject;
+use RayaCash\PspCustomer;
+use RayaCash\PspTransfer;
 use RayaCash\RayaCash;
 use RayaCash\Tests\Support\Fixtures;
 use RayaCash\Tests\Support\RecordedRequest;
@@ -180,6 +182,79 @@ final class PaginationTest extends TestCase
                 ['limit' => '2'],
                 ['limit' => '2', 'cursor' => 'c1'],
                 ['limit' => '2', 'cursor' => 'c2'],
+            ],
+            $this->queries(),
+        );
+        self::assertSame(['Bearer ' . Fixtures::TEST_KEY], $this->authorizations());
+    }
+
+    /**
+     * Raya PSP: los clientes se recorren por su propia ruta, con los mismos filtros y las mismas
+     * opciones, y cada elemento es un PspCustomer.
+     */
+    public function testPspCustomersWalkEveryPage(): void
+    {
+        $this->api->add(200, Fixtures::pspCustomerPage(['pspc_1', 'pspc_2'], 'c1'));
+        $this->api->add(200, Fixtures::pspCustomerPage(['pspc_3', 'pspc_4'], 'c2'));
+        $this->api->add(200, Fixtures::pspCustomerPage(['pspc_5'], null));
+        $page = $this->api->client()->psp->customers->list(
+            ['status' => 'active', 'limit' => 2],
+            ['api_key' => Fixtures::OTHER_KEY],
+        );
+        $ids = [];
+        $classes = [];
+        foreach ($page->autoPagingIter() as $index => $pspCustomer) {
+            $ids[$index] = $pspCustomer->id;
+            $classes[] = $pspCustomer::class;
+        }
+        self::assertSame(['pspc_1', 'pspc_2', 'pspc_3', 'pspc_4', 'pspc_5'], $ids);
+        self::assertSame(array_fill(0, 5, PspCustomer::class), $classes);
+        foreach ($this->api->requests as $request) {
+            self::assertSame('/v1/psp/customers', $request->path);
+        }
+        self::assertSame(
+            [
+                ['status' => 'active', 'limit' => '2'],
+                ['status' => 'active', 'limit' => '2', 'cursor' => 'c1'],
+                ['status' => 'active', 'limit' => '2', 'cursor' => 'c2'],
+            ],
+            $this->queries(),
+        );
+        self::assertSame(['Bearer ' . Fixtures::OTHER_KEY], $this->authorizations());
+    }
+
+    /**
+     * Raya PSP: las transferencias de un cliente, página por página con nextPage() y con el
+     * estilo global, por su propia ruta y con el mismo filtro.
+     */
+    public function testPspTransfersWalkEveryPage(): void
+    {
+        RayaCash::setApiKey(Fixtures::TEST_KEY);
+        RayaCash::setHttpClient($this->api);
+        $this->api->add(200, Fixtures::pspTransferPage(['pspt_1', 'pspt_2'], 'c1'));
+        $this->api->add(200, Fixtures::pspTransferPage(['pspt_3'], null));
+        $page = PspTransfer::list(['customer' => Fixtures::PSP_CUSTOMER_ID, 'limit' => 2]);
+        $next = $page->nextPage();
+        $ids = [];
+        $classes = [];
+        foreach ([$page, $next] as $each) {
+            foreach ($each as $pspTransfer) {
+                $ids[] = $pspTransfer->id;
+                $classes[] = $pspTransfer::class;
+            }
+        }
+        self::assertSame(['pspt_1', 'pspt_2', 'pspt_3'], $ids);
+        self::assertSame(array_fill(0, 3, PspTransfer::class), $classes);
+        self::assertFalse($next->has_more);
+        // La última página no pide otra.
+        self::assertSame([], $next->nextPage()->data);
+        foreach ($this->api->requests as $request) {
+            self::assertSame('/v1/psp/transfers', $request->path);
+        }
+        self::assertSame(
+            [
+                ['customer' => Fixtures::PSP_CUSTOMER_ID, 'limit' => '2'],
+                ['customer' => Fixtures::PSP_CUSTOMER_ID, 'limit' => '2', 'cursor' => 'c1'],
             ],
             $this->queries(),
         );

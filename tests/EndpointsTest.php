@@ -16,6 +16,7 @@ use RayaCash\Exception\InvalidRequestException;
 use RayaCash\Exception\NotFoundException;
 use RayaCash\Exception\PermissionDeniedException;
 use RayaCash\Exception\RateLimitException;
+use RayaCash\Exception\RayaException;
 use RayaCash\Exception\UnprocessableEntityException;
 use RayaCash\HttpClient\TransportException;
 use RayaCash\IdentityVerification;
@@ -23,6 +24,10 @@ use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspCustomerBalance;
+use RayaCash\PspTransfer;
 use RayaCash\RayaClient;
 use RayaCash\Tests\Support\FakeDecimal;
 use RayaCash\Tests\Support\Fixtures;
@@ -31,7 +36,7 @@ use RayaCash\Transfer;
 use RayaCash\User;
 use RayaCash\Util\Uuid;
 
-/** Los 21 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
+/** Los 33 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
 final class EndpointsTest extends TestCase
 {
     private const IDEMPOTENCY_KEY = '9b2f6c4e-1d3a-4e8b-a5c7-0f9e8d7c6b5a';
@@ -1743,6 +1748,1131 @@ final class EndpointsTest extends TestCase
         self::assertCount(1, $this->api->requests);
     }
 
+    // --- Raya PSP: los clientes, sus transferencias y el saldo, con la clave secreta -----------
+
+    /**
+     * POST /v1/psp/customers con Raya Identity: solo identity_verification (más tu
+     * external_reference y tu metadata), en el orden de la API (pspexternal/api_params.py) y no
+     * en el de tu array, con una Idempotency-Key por llamada. El CUIL, el nombre y el tipo de
+     * persona salen de la verificación.
+     */
+    public function testPspCustomerCreate(): void
+    {
+        $this->api->add(201, Fixtures::PSP_CUSTOMER_CREATED);
+        $pspCustomer = $this->api->client()->psp->customers->create([
+            'metadata' => ['plan' => 'pro'],
+            'external_reference' => 'cliente-8812',
+            'identity_verification' => Fixtures::VERIFICATION_ID,
+        ]);
+        self::assertSame(PspCustomer::class, $pspCustomer::class);
+        self::assertSame(PspCustomer::STATUS_ACTIVE, $pspCustomer->status);
+        self::assertSame(
+            ['27123456781', 'María Laura Ejemplo', 'F', Fixtures::VERIFICATION_ID],
+            [
+                $pspCustomer->tax_id,
+                $pspCustomer->name,
+                $pspCustomer->person_type,
+                $pspCustomer->identity_verification,
+            ],
+        );
+        self::assertSame(PspCustomer\Cvu::class, get_debug_type($pspCustomer->cvu));
+        self::assertSame(
+            [Fixtures::PSP_ACCOUNT, 'maria_ejemplo'],
+            [$pspCustomer->cvu?->account, $pspCustomer->cvu?->alias],
+        );
+        self::assertSame(0, $pspCustomer->balance);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', 'https://api.raya.cash/v1/psp/customers'],
+            [$request->method, $request->url],
+        );
+        self::assertSame(
+            '{"identity_verification":"idv_3kT9vQ2mXw7Lp0aBcD4eF6gH",'
+                . '"external_reference":"cliente-8812","metadata":{"plan":"pro"}}',
+            $request->body,
+        );
+        self::assertSame('application/json', $request->header('content-type'));
+        // Con tu clave secreta, y sin clave propia, un UUID v4 para esta llamada.
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        $key = $request->header('idempotency-key') ?? '';
+        self::assertMatchesRegularExpression(self::UUID_V4, $key);
+        $response = $pspCustomer->getLastResponse();
+        self::assertNotNull($response);
+        self::assertSame([$key, 201], [$response->idempotencyKey, $response->httpStatus]);
+    }
+
+    /**
+     * Sin Raya Identity (tu propio KYC), una persona humana: sus datos y las tres URLs, sin gender
+     * (el sexo sale del frente del DNI), en el orden de la API, y 202 verifying.
+     */
+    public function testPspCustomerCreateWithThePhotos(): void
+    {
+        $photo = Fixtures::PSP_PHOTO_URLS;
+        $this->api->add(202, Fixtures::PSP_CUSTOMER_VERIFYING);
+        $pspCustomer = $this->api->client()->psp->customers->create(
+            [
+                'selfie_url' => $photo['selfie_url'],
+                'document_back_url' => $photo['document_back_url'],
+                'document_front_url' => $photo['document_front_url'],
+                'person_type' => PspCustomer::PERSON_TYPE_F,
+                'name' => 'María Laura Ejemplo',
+                'tax_id' => '27123456781',
+            ],
+            ['idempotency_key' => 'alta-cliente-8812'],
+        );
+        self::assertSame(PspCustomer::STATUS_VERIFYING, $pspCustomer->status);
+        self::assertNull($pspCustomer->cvu);
+        self::assertNull($pspCustomer->identity_verification);
+        self::assertSame(202, $pspCustomer->getLastResponse()?->httpStatus);
+        self::assertSame(
+            '{"tax_id":"27123456781","name":"Mar\u00eda Laura Ejemplo","person_type":"F",'
+                . '"document_front_url":"' . $photo['document_front_url'] . '",'
+                . '"document_back_url":"' . $photo['document_back_url'] . '",'
+                . '"selfie_url":"' . $photo['selfie_url'] . '"}',
+            $this->api->last()->body,
+        );
+        self::assertStringContainsString(
+            '"selfie_url":"https://archivos.example.com/kyc/selfie.jpg?firma=ejemplo"',
+            $this->api->last()->body,
+        );
+        self::assertSame('alta-cliente-8812', $this->api->last()->header('idempotency-key'));
+    }
+
+    /** Una persona jurídica no lleva prueba de identidad: la revisamos y vuelve verifying. */
+    public function testPspCustomerCreateForALegalPerson(): void
+    {
+        $this->api->add(202, Fixtures::PSP_COMPANY_VERIFYING);
+        $pspCustomer = $this->api->client()->psp->customers->create([
+            'tax_id' => '30712345672',
+            'name' => 'Distribuidora Ejemplo S. A.',
+            'person_type' => PspCustomer::PERSON_TYPE_J,
+            'external_reference' => 'cliente-8813',
+        ]);
+        self::assertSame(
+            '{"tax_id":"30712345672","name":"Distribuidora Ejemplo S. A.","person_type":"J",'
+                . '"external_reference":"cliente-8813"}',
+            $this->api->last()->body,
+        );
+        self::assertSame(Fixtures::PSP_COMPANY_ID, $pspCustomer->id);
+        self::assertSame(['J', 'verifying'], [$pspCustomer->person_type, $pspCustomer->status]);
+        self::assertSame([], $pspCustomer->metadata);
+    }
+
+    /** Solo viaja lo que pasás: los null no van, y la metadata va siempre como objeto JSON. */
+    public function testPspCustomerCreateSendsOnlyWhatYouPass(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $this->api->add(201, Fixtures::PSP_CUSTOMER_CREATED);
+        $customers->create([
+            'identity_verification' => Fixtures::VERIFICATION_ID,
+            'tax_id' => null,
+            'name' => null,
+            'person_type' => null,
+            'document_front_url' => null,
+            'document_back_url' => null,
+            'selfie_url' => null,
+            'external_reference' => null,
+            'metadata' => null,
+        ]);
+        self::assertSame(
+            '{"identity_verification":"' . Fixtures::VERIFICATION_ID . '"}',
+            $this->api->last()->body,
+        );
+        // Con las fotos, una identity_verification en null tampoco va.
+        $this->api->add(202, Fixtures::PSP_CUSTOMER_VERIFYING);
+        $customers->create([
+            'identity_verification' => null,
+            'tax_id' => '27123456781',
+            'name' => 'María Laura Ejemplo',
+            'person_type' => 'F',
+            ...Fixtures::PSP_PHOTO_URLS,
+        ]);
+        self::assertSame(
+            [
+                'tax_id' => '27123456781',
+                'name' => 'María Laura Ejemplo',
+                'person_type' => 'F',
+                ...Fixtures::PSP_PHOTO_URLS,
+            ],
+            $this->api->lastJson(),
+        );
+        // La metadata viaja siempre como objeto JSON: [] va como {}, y un stdClass también vale.
+        $this->api->add(202, Fixtures::PSP_COMPANY_VERIFYING);
+        $this->api->add(202, Fixtures::PSP_COMPANY_VERIFYING);
+        $customers->create([
+            'tax_id' => '30712345672',
+            'name' => 'Ejemplo S. A.',
+            'person_type' => 'J',
+            'metadata' => [],
+        ]);
+        self::assertSame(
+            '{"tax_id":"30712345672","name":"Ejemplo S. A.","person_type":"J","metadata":{}}',
+            $this->api->last()->body,
+        );
+        $customers->create([
+            'tax_id' => '30712345672',
+            'name' => 'Ejemplo S. A.',
+            'person_type' => 'J',
+            'metadata' => (object) ['plan' => 'pro'],
+        ]);
+        self::assertSame(
+            '{"tax_id":"30712345672","name":"Ejemplo S. A.","person_type":"J",'
+                . '"metadata":{"plan":"pro"}}',
+            $this->api->last()->body,
+        );
+    }
+
+    /**
+     * Lo que nunca puede andar falla antes de mandar nada: un parámetro que no es de la API
+     * (también gender y terms_accepted_at), una identity_verification que no es un string y, sin
+     * ella, un tax_id o un name que no son strings (también si faltan).
+     */
+    public function testPspCustomerCreateRejectsWhatCannotWork(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $valid = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        $photos = [
+            'tax_id' => '27123456781',
+            'name' => 'María Laura Ejemplo',
+            'person_type' => 'F',
+            ...Fixtures::PSP_PHOTO_URLS,
+        ];
+        $names = 'identity_verification, tax_id, name, person_type, document_front_url, '
+            . 'document_back_url, selfie_url, external_reference y metadata';
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $customers->create([Fixtures::VERIFICATION_ID]),
+            'psp->customers->create recibe un array con los nombres de los parámetros, como '
+                . "['identity_verification' => 'idv_…'], no una lista.",
+        );
+        // gender ya no es un parámetro: el sexo sale del frente del DNI. Y sin términos en la
+        // API, terms_accepted_at tampoco.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create([...$photos, 'gender' => 'F']),
+            "psp->customers->create no acepta \"gender\": los parámetros son {$names}.",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                [...$valid, 'terms_accepted_at' => '2026-10-24T13:05:00-03:00'],
+            ),
+            "psp->customers->create no acepta \"terms_accepted_at\": los parámetros son {$names}.",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: en camelCase)
+                ['identityVerification' => Fixtures::VERIFICATION_ID],
+            ),
+            'no acepta "identityVerification" (¿quisiste decir identity_verification?)',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: tax_id en camelCase)
+                ['taxId' => '30712345672', 'name' => 'Ejemplo S. A.', 'person_type' => 'J'],
+            ),
+            'no acepta "taxId" (¿quisiste decir tax_id?)',
+        );
+        // identity_verification es el id (idv_…), no la IdentityVerification entera.
+        $verification = IdentityVerification::constructFrom(Fixtures::VERIFICATION_VERIFIED);
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $customers->create(['identity_verification' => $verification]),
+            'identity_verification tiene que ser un string con el id de una verificación de '
+                . 'Identidad (idv_…), no RayaCash\IdentityVerification.',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $customers->create(['identity_verification' => 1042]),
+            'identity_verification tiene que ser un string con el id de una verificación de '
+                . 'Identidad (idv_…), no int.',
+        );
+        // Sin identity_verification van los datos: tax_id y name, siempre como string (lo que no
+        // es un string falla, también si falta), con la pista de Raya Identity.
+        $hint = ' Si tu cliente se verificó con Raya Identity, mandá solo identity_verification.';
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (a propósito: sin parámetros)
+            static fn() => $customers->create([]),
+            'tax_id tiene que ser un string: el CUIL o CUIT de tu cliente, 11 dígitos sin guiones, '
+                . "como '27123456781'.{$hint}",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                [...$photos, 'tax_id' => 27123456781],
+            ),
+            "como '27123456781'.{$hint}",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: falta tax_id)
+                ['name' => 'Ejemplo S. A.', 'person_type' => 'J', 'external_reference' => 'c-1'],
+            ),
+            "como '27123456781'.{$hint}",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                [...$photos, 'name' => ['María', 'Ejemplo']],
+            ),
+            'name tiene que ser un string: el nombre y apellido de tu cliente (o su razón '
+                . "social).{$hint}",
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: falta name)
+                ['tax_id' => '30712345672', 'person_type' => 'J'],
+            ),
+            'name tiene que ser un string: el nombre y apellido de tu cliente (o su razón '
+                . "social).{$hint}",
+        );
+        // La clave entre los parámetros se perdería: va en las opciones.
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            self::assertThrows(
+                \TypeError::class,
+                static fn() => $customers->create(
+                    ['identity_verification' => Fixtures::VERIFICATION_ID, $name => 'k'],
+                ),
+                "psp->customers->create no acepta {$name} entre los parámetros: va en las "
+                    . 'opciones',
+            );
+        }
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                [...$valid, 'metadata' => ['pro']],
+            ),
+            'metadata tiene que ser un array de string a string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->create($valid, ['idempotencyKey' => 'k']),
+            'options no acepta "idempotencyKey" (¿quisiste decir idempotency_key?)',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $customers->create($valid, ['idempotency_key' => 'con espacios']),
+            'idempotency_key tiene que tener de 1 a 255 caracteres ASCII visibles',
+        );
+        self::assertSame([], $this->api->requests);
+    }
+
+    /**
+     * Las formas y los formatos los valida la API, no el SDK: un CUIL con un dígito de menos, un
+     * alta sin person_type o sin las fotos e identity_verification con los datos (en vez de sola)
+     * llegan, y vuelven con el campo en getParam(). También lo que dice de una verificación.
+     */
+    public function testPspCustomerCreateLeavesTheRulesToTheApi(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $message = 'tax_id tiene que ser un CUIL o CUIT válido: 11 dígitos, sin guiones.';
+        $this->api->addError(400, 'PARAMETER_INVALID', $message, ['field' => 'tax_id']);
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            static fn() => $customers->create([
+                'tax_id' => '2712345678',
+                'name' => 'María Laura Ejemplo',
+                'person_type' => 'F',
+                ...Fixtures::PSP_PHOTO_URLS,
+            ]),
+            $message,
+            'PARAMETER_INVALID',
+        );
+        self::assertSame('tax_id', $error->getParam());
+        $this->api->addError(
+            400,
+            'PARAMETER_MISSING',
+            'Falta el parámetro person_type.',
+            ['field' => 'person_type'],
+        );
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            // @phpstan-ignore argument.type (a propósito: falta person_type)
+            static fn() => $customers->create(['tax_id' => '27123456781', 'name' => 'María']),
+            'Falta el parámetro person_type.',
+            'PARAMETER_MISSING',
+        );
+        self::assertSame('person_type', $error->getParam());
+        self::assertSame('{"tax_id":"27123456781","name":"Mar\u00eda"}', $this->api->last()->body);
+        // Una persona humana sin Raya Identity y sin las fotos.
+        $this->api->addError(
+            400,
+            'PARAMETER_MISSING',
+            'Falta el parámetro document_front_url.',
+            ['field' => 'document_front_url'],
+        );
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: sin las fotos)
+                ['tax_id' => '27123456781', 'name' => 'María Laura Ejemplo', 'person_type' => 'F'],
+            ),
+            'Falta el parámetro document_front_url.',
+            'PARAMETER_MISSING',
+        );
+        self::assertSame('document_front_url', $error->getParam());
+        // identity_verification va sola: con los datos, la API responde en el primero que sobra.
+        $message = 'Con identity_verification no mandes tax_id, name, person_type ni fotos: los '
+            . 'tomamos de la verificación.';
+        $this->api->addError(400, 'PARAMETER_INVALID', $message, ['field' => 'tax_id']);
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            static fn() => $customers->create(
+                // @phpstan-ignore argument.type (a propósito: identity_verification con tax_id)
+                ['identity_verification' => Fixtures::VERIFICATION_ID, 'tax_id' => '27123456781'],
+            ),
+            $message,
+            'PARAMETER_INVALID',
+        );
+        self::assertSame('tax_id', $error->getParam());
+        self::assertSame(
+            '{"identity_verification":"' . Fixtures::VERIFICATION_ID . '","tax_id":"27123456781"}',
+            $this->api->last()->body,
+        );
+        // Una verificación con la que no se puede crear el cliente (acá, sin un CUIL válido).
+        $message = 'Esa verificación no tiene un CUIL válido: creá el cliente con tax_id, name, '
+            . 'person_type y las fotos.';
+        $this->api->addError(
+            400,
+            'PARAMETER_INVALID',
+            $message,
+            ['field' => 'identity_verification'],
+        );
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            static fn() => $customers->create(
+                ['identity_verification' => Fixtures::VERIFICATION_ID],
+            ),
+            $message,
+            'PARAMETER_INVALID',
+        );
+        self::assertSame('identity_verification', $error->getParam());
+        self::assertCount(5, $this->api->requests);
+    }
+
+    /**
+     * Los errores propios de Raya PSP: la clase sale del status, la data llega tal cual y ninguno
+     * se reintenta.
+     *
+     * @return iterable<string, array{
+     *     \Closure(RayaClient): mixed,
+     *     int,
+     *     string,
+     *     array<string, string|null>|null,
+     *     class-string<RayaException>,
+     * }>
+     */
+    public static function pspErrors(): iterable
+    {
+        $person = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        $company = ['tax_id' => '30712345672', 'name' => 'Ejemplo S. A.', 'person_type' => 'J'];
+        $create = static fn(RayaClient $client): mixed => $client->psp->customers->create($person);
+        $createCompany = static fn(RayaClient $client): mixed => $client->psp->customers->create(
+            $company,
+        );
+        $transfer = static fn(RayaClient $client): mixed => $client->psp->transfers->create(
+            ['customer' => Fixtures::PSP_CUSTOMER_ID, 'amount' => 18350.5, 'destination' => 'x'],
+            ['idempotency_key' => 'k'],
+        );
+        yield 'PSP_NOT_ACTIVATED' => [
+            $create,
+            403,
+            'PSP_NOT_ACTIVATED',
+            null,
+            PermissionDeniedException::class,
+        ];
+        // Con ese CUIL o CUIT, o con esa verificación: el id es el del cliente que ya tenés.
+        yield 'CUSTOMER_ALREADY_EXISTS' => [
+            $create,
+            409,
+            'CUSTOMER_ALREADY_EXISTS',
+            ['customer' => Fixtures::PSP_CUSTOMER_ID],
+            ConflictException::class,
+        ];
+        // Solo de una persona jurídica: su razón social no es la del Registro Nacional de
+        // Sociedades.
+        yield 'CUSTOMER_DATA_MISMATCH' => [
+            $createCompany,
+            422,
+            'CUSTOMER_DATA_MISMATCH',
+            ['field' => 'name'],
+            UnprocessableEntityException::class,
+        ];
+        yield 'TAX_ID_NOT_REGISTERED' => [
+            $createCompany,
+            422,
+            'TAX_ID_NOT_REGISTERED',
+            null,
+            UnprocessableEntityException::class,
+        ];
+        yield 'CUSTOMER_NOT_FOUND en retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieve('pspc_x'),
+            404,
+            'CUSTOMER_NOT_FOUND',
+            null,
+            NotFoundException::class,
+        ];
+        yield 'CUSTOMER_STATUS_CONFLICT: un bloqueo de Raya' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->unblock('pspc_x'),
+            409,
+            'CUSTOMER_STATUS_CONFLICT',
+            ['status' => 'blocked', 'blocked_by' => 'raya'],
+            ConflictException::class,
+        ];
+        yield 'CUSTOMER_STATUS_CONFLICT: dar de baja uno verifying' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->close('pspc_x'),
+            409,
+            'CUSTOMER_STATUS_CONFLICT',
+            ['status' => 'verifying', 'blocked_by' => null],
+            ConflictException::class,
+        ];
+        yield 'CUSTOMER_NOT_FOUND en transfers->create' => [
+            $transfer,
+            404,
+            'CUSTOMER_NOT_FOUND',
+            ['field' => 'customer'],
+            NotFoundException::class,
+        ];
+        yield 'INSUFFICIENT_BALANCE: tu saldo manda' => [
+            $transfer,
+            422,
+            'INSUFFICIENT_BALANCE',
+            null,
+            UnprocessableEntityException::class,
+        ];
+        yield 'CUSTOMER_INSUFFICIENT_BALANCE' => [
+            $transfer,
+            422,
+            'CUSTOMER_INSUFFICIENT_BALANCE',
+            null,
+            UnprocessableEntityException::class,
+        ];
+        yield 'TRANSFERS_BLOCKED' => [
+            $transfer,
+            403,
+            'TRANSFERS_BLOCKED',
+            null,
+            PermissionDeniedException::class,
+        ];
+        yield 'TRANSFER_NOT_FOUND' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->retrieve('pspt_x'),
+            404,
+            'TRANSFER_NOT_FOUND',
+            null,
+            NotFoundException::class,
+        ];
+    }
+
+    /**
+     * @param \Closure(RayaClient): mixed $call
+     * @param array<string, string|null>|null $data
+     * @param class-string<RayaException> $class
+     */
+    #[DataProvider('pspErrors')]
+    public function testPspErrors(
+        \Closure $call,
+        int $status,
+        string $code,
+        ?array $data,
+        string $class,
+    ): void {
+        $this->api->addError($status, $code, 'Mensaje de prueba.', $data);
+        $client = $this->api->client();
+        $error = self::assertThrows($class, static fn() => $call($client), errorCode: $code);
+        self::assertSame($class, $error::class);
+        self::assertSame($status, $error->getHttpStatus());
+        self::assertSame('Mensaje de prueba.', $error->getMessage());
+        self::assertSame($data, $error->getData());
+        self::assertCount(1, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    /**
+     * Un alta con Raya Identity que el banco todavía no puede hacer (503 BANK_UNAVAILABLE con
+     * Retry-After: 60) se reintenta con la misma Idempotency-Key y el mismo body; el tope por CUIL
+     * de las altas con fotos (429 con un Retry-After de más de 60 s) y API_UNAVAILABLE no se
+     * reintentan.
+     */
+    public function testPspCustomerCreateRetries(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $params = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        $photos = [
+            'tax_id' => '27123456781',
+            'name' => 'María Laura Ejemplo',
+            'person_type' => 'F',
+            ...Fixtures::PSP_PHOTO_URLS,
+        ];
+        $this->api->addError(503, 'BANK_UNAVAILABLE', headers: ['Retry-After' => '60']);
+        $this->api->add(201, Fixtures::PSP_CUSTOMER_CREATED);
+        $pspCustomer = $customers->create($params);
+        self::assertSame(PspCustomer::STATUS_ACTIVE, $pspCustomer->status);
+        self::assertSame([60.0], $this->sleeps);
+        [$first, $second] = $this->api->requests;
+        self::assertSame($first->header('idempotency-key'), $second->header('idempotency-key'));
+        self::assertSame($first->body, $second->body);
+
+        $this->api->addError(
+            429,
+            'RATE_LIMITED',
+            'Hiciste demasiadas requests. Esperá unos segundos y probá de nuevo.',
+            ['limit' => 'kyc_per_tax_id'],
+            ['Retry-After' => '86400'],
+        );
+        $error = self::assertThrows(
+            RateLimitException::class,
+            static fn() => $customers->create($photos),
+            errorCode: 'RATE_LIMITED',
+        );
+        self::assertSame(86400.0, $error->getRetryAfter());
+        self::assertSame(['limit' => 'kyc_per_tax_id'], $error->getData());
+        $this->api->addError(503, 'API_UNAVAILABLE');
+        self::assertThrows(
+            ApiException::class,
+            static fn() => $customers->create($params),
+            errorCode: 'API_UNAVAILABLE',
+        );
+        self::assertCount(4, $this->api->requests);
+        self::assertSame([60.0], $this->sleeps);
+    }
+
+    public function testPspCustomerRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        $pspCustomer = $this->api->client()->psp->customers->retrieve(Fixtures::PSP_CUSTOMER_ID);
+        self::assertSame(PspCustomer::class, $pspCustomer::class);
+        self::assertSame(23649.5, $pspCustomer->balance);
+        self::assertSame('MARIA LAURA EJEMPLO', $pspCustomer->cvu?->holder_name);
+        self::assertSame(['plan' => 'pro'], $pspCustomer->metadata);
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID],
+            [$request->method, $request->path],
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->header('content-type'));
+        self::assertNull($request->body);
+        self::assertSame([], $request->query);
+    }
+
+    public function testPspCustomerRetrieveBalance(): void
+    {
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_BALANCE);
+        $customerBalance = $this->api->client()->psp->customers->retrieveBalance(
+            Fixtures::PSP_CUSTOMER_ID,
+        );
+        self::assertSame(PspCustomerBalance::class, $customerBalance::class);
+        self::assertSame(
+            [Fixtures::PSP_CUSTOMER_ID, 23649.5, 23649.5, 'ARS'],
+            [
+                $customerBalance->customer,
+                $customerBalance->available,
+                $customerBalance->transferable,
+                $customerBalance->currency,
+            ],
+        );
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID . '/balance'],
+            [$request->method, $request->path],
+        );
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+    }
+
+    public function testPspCustomerList(): void
+    {
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_LIST);
+        $customers = $this->api->client()->psp->customers;
+        // Los filtros en cualquier orden: la query sale en el de la API.
+        $page = $customers->list([
+            'cursor' => 'c1',
+            'limit' => 50,
+            'created_lt' => '2026-10-25T00:00:00-03:00',
+            'created_gte' => new \DateTimeImmutable('2026-10-24 03:00', new \DateTimeZone('UTC')),
+            'external_reference' => 'cliente 8812',
+            'status' => PspCustomer::STATUS_ACTIVE,
+        ]);
+        self::assertSame(ListObject::class, $page::class);
+        $classes = [];
+        foreach ($page as $pspCustomer) {
+            $classes[] = $pspCustomer::class;
+        }
+        self::assertSame([PspCustomer::class, PspCustomer::class], $classes);
+        self::assertSame(
+            [Fixtures::PSP_COMPANY_ID, Fixtures::PSP_CUSTOMER_ID],
+            [$page->data[0]->id, $page->data[1]->id],
+        );
+        self::assertFalse($page->has_more);
+        self::assertNull($page->next_cursor);
+        $request = $this->api->last();
+        self::assertSame(['GET', '/v1/psp/customers'], [$request->method, $request->path]);
+        self::assertSame(
+            'https://api.raya.cash/v1/psp/customers?status=active'
+                . '&external_reference=cliente%208812&created_gte=2026-10-24T03%3A00%3A00%2B00%3A00'
+                . '&created_lt=2026-10-25T00%3A00%3A00-03%3A00&limit=50&cursor=c1',
+            $request->url,
+        );
+        self::assertNull($request->body);
+        self::assertNull($request->header('idempotency-key'));
+        // Sin filtros, la URL pelada.
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_LIST);
+        $customers->list();
+        self::assertSame('https://api.raya.cash/v1/psp/customers', $this->api->last()->url);
+        self::assertCount(2, $this->api->requests);
+    }
+
+    public function testPspCustomerListRejectsWhatCannotWork(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        // Sin filtro por CUIL o CUIT: sería un dato personal en la URL.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->list(['tax_id' => '27123456781']),
+            'psp->customers->list no acepta "tax_id": los parámetros son status, '
+                . 'external_reference, created_gte, created_lt, limit y cursor.',
+        );
+        // direction es de las transferencias: acá no existe.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $customers->list(['direction' => 'inbound']),
+            'psp->customers->list no acepta "direction"',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $customers->list(['limit' => 1.5]),
+            'limit no acepta un float.',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $customers->list(['status' => true]),
+            'status no puede ser un bool.',
+        );
+        // La Idempotency-Key solo va en los POST.
+        $get = [
+            static fn() => $customers->retrieve('pspc_x', ['idempotency_key' => 'k']),
+            static fn() => $customers->retrieveBalance('pspc_x', ['idempotency_key' => 'k']),
+            static fn() => $customers->list([], ['idempotency_key' => 'k']),
+        ];
+        foreach ($get as $call) {
+            self::assertThrows(
+                \ValueError::class,
+                $call,
+                'La Idempotency-Key solo va en los POST.',
+            );
+        }
+        self::assertSame([], $this->api->requests);
+    }
+
+    /**
+     * Las cuatro acciones: POST /v1/psp/customers/:id/<acción>, sin body y con su Idempotency-Key
+     * (una nueva por llamada, si no pasás la tuya). recreate puede volver 202 pending.
+     */
+    public function testPspCustomerActions(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $base = '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID;
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        $blocked = $customers->block(Fixtures::PSP_CUSTOMER_ID);
+        self::assertSame(PspCustomer::class, $blocked::class);
+        self::assertSame(
+            [PspCustomer::STATUS_BLOCKED, PspCustomer::BLOCKED_BY_ACCOUNT],
+            [$blocked->status, $blocked->blocked_by],
+        );
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        $unblocked = $customers->unblock(Fixtures::PSP_CUSTOMER_ID);
+        self::assertSame(
+            [PspCustomer::STATUS_ACTIVE, null],
+            [$unblocked->status, $unblocked->blocked_by],
+        );
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_CLOSED);
+        $closed = $customers->close(Fixtures::PSP_CUSTOMER_ID);
+        self::assertSame(
+            [PspCustomer::STATUS_CLOSED, PspCustomer\Cvu::STATUS_CLOSING, 23649.5],
+            [$closed->status, $closed->cvu?->status, $closed->balance],
+        );
+        $this->api->add(202, Fixtures::PSP_CUSTOMER_PENDING);
+        $recreated = $customers->recreate(
+            Fixtures::PSP_CUSTOMER_ID,
+            ['idempotency_key' => 'recrear-cliente-8812'],
+        );
+        self::assertSame(PspCustomer::STATUS_PENDING, $recreated->status);
+        self::assertSame(202, $recreated->getLastResponse()?->httpStatus);
+        $paths = [];
+        $keys = [];
+        foreach ($this->api->requests as $request) {
+            $paths[] = "{$request->method} {$request->path}";
+            $keys[] = $request->header('idempotency-key') ?? '';
+            self::assertNull($request->body);
+            self::assertNull($request->header('content-type'));
+            self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        }
+        self::assertSame(
+            [
+                "POST {$base}/block",
+                "POST {$base}/unblock",
+                "POST {$base}/close",
+                "POST {$base}/recreate",
+            ],
+            $paths,
+        );
+        $generated = array_slice($keys, 0, 3);
+        foreach ($generated as $key) {
+            self::assertMatchesRegularExpression(self::UUID_V4, $key);
+        }
+        self::assertCount(3, array_unique($generated));
+        self::assertSame('recrear-cliente-8812', $keys[3]);
+    }
+
+    public function testPspCustomerIdsAreEncodedAndNeverEmpty(): void
+    {
+        $customers = $this->api->client()->psp->customers;
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        $customers->retrieve('../balance');
+        self::assertSame('/v1/psp/customers/..%2Fbalance', $this->api->last()->path);
+        $calls = [
+            static fn(string $id): mixed => $customers->retrieve($id),
+            static fn(string $id): mixed => $customers->retrieveBalance($id),
+            static fn(string $id): mixed => $customers->block($id),
+            static fn(string $id): mixed => $customers->unblock($id),
+            static fn(string $id): mixed => $customers->close($id),
+            static fn(string $id): mixed => $customers->recreate($id),
+            static fn(string $id): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => $id],
+            )->block(),
+        ];
+        $invalid = [
+            ['   ', 'customerId no puede estar vacío.'],
+            ['.', 'customerId no puede ser "." ni "..".'],
+            ['..', 'customerId no puede ser "." ni "..".'],
+        ];
+        foreach ($calls as $call) {
+            foreach ($invalid as [$id, $message]) {
+                self::assertThrows(\ValueError::class, static fn() => $call($id), $message);
+            }
+        }
+        foreach (array_slice($calls, 0, 6) as $call) {
+            self::assertThrows(
+                \ValueError::class,
+                static fn() => $call(''),
+                'customerId no puede estar vacío.',
+            );
+        }
+        self::assertCount(1, $this->api->requests);
+    }
+
+    /** POST /v1/psp/transfers: customer, amount y destination, con la Idempotency-Key tuya. */
+    public function testPspTransferCreate(): void
+    {
+        $this->api->add(201, Fixtures::PSP_TRANSFER_OUTBOUND_PENDING);
+        $pspTransfer = $this->api->client()->psp->transfers->create(
+            [
+                'destination' => '0000123380736153041182',
+                'amount' => new FakeDecimal('18350.50'),
+                'customer' => Fixtures::PSP_CUSTOMER_ID,
+            ],
+            ['idempotency_key' => self::IDEMPOTENCY_KEY],
+        );
+        self::assertSame(PspTransfer::class, $pspTransfer::class);
+        self::assertSame(
+            [PspTransfer::STATUS_PENDING, PspTransfer::DIRECTION_OUTBOUND],
+            [$pspTransfer->status, $pspTransfer->direction],
+        );
+        self::assertSame(
+            [18350.5, 61.37, 18289.13],
+            [$pspTransfer->amount, $pspTransfer->fee, $pspTransfer->net_amount],
+        );
+        self::assertSame(PspTransfer\Counterparty::class, $pspTransfer->counterparty::class);
+        self::assertSame('Proveedora Ejemplo S. A.', $pspTransfer->counterparty->name);
+        self::assertSame(Fixtures::PSP_ACCOUNT, $pspTransfer->account);
+        self::assertNull($pspTransfer->reference);
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', 'https://api.raya.cash/v1/psp/transfers'],
+            [$request->method, $request->url],
+        );
+        self::assertSame(
+            '{"customer":"' . Fixtures::PSP_CUSTOMER_ID . '","amount":18350.5,'
+                . '"destination":"0000123380736153041182"}',
+            $request->body,
+        );
+        self::assertSame('application/json', $request->header('content-type'));
+        self::assertSame(self::IDEMPOTENCY_KEY, $request->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertSame(self::IDEMPOTENCY_KEY, $pspTransfer->getLastResponse()?->idempotencyKey);
+    }
+
+    #[DataProvider('amountForms')]
+    public function testPspTransferAmountForms(
+        int|float|string|\Stringable $amount,
+        string $expected,
+    ): void {
+        $this->api->add(201, Fixtures::PSP_TRANSFER_OUTBOUND_PENDING);
+        $this->api->client()->psp->transfers->create(
+            ['customer' => 'pspc_x', 'amount' => $amount, 'destination' => 'proveedor.ejemplo'],
+            ['idempotency_key' => 'k'],
+        );
+        self::assertSame(
+            '{"customer":"pspc_x","amount":' . $expected . ',"destination":"proveedor.ejemplo"}',
+            $this->api->last()->body,
+        );
+    }
+
+    /**
+     * Como en transfers->create: nada sale sin la clave de idempotencia, ni sin un cliente y un
+     * destino string.
+     */
+    public function testPspTransferCreateRejectsWhatCannotWork(): void
+    {
+        $transfers = $this->api->client()->psp->transfers;
+        $params = ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x'];
+        // Sin opciones: PHP no deja llamar sin el segundo argumento.
+        self::assertThrows(
+            \ArgumentCountError::class,
+            // @phpstan-ignore arguments.count (lo que haría alguien sin PHPStan)
+            static fn() => $transfers->create($params),
+        );
+        $error = self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $transfers->create($params, []),
+        );
+        self::assertSame(
+            'psp->transfers->create necesita idempotency_key: generá un UUID v4 (por ejemplo, '
+                . 'con RayaCash\Util\Uuid::v4()), guardalo con la operación antes de llamar y '
+                . 'reusalo en cada reintento: $client->psp->transfers->create([...], '
+                . "['idempotency_key' => \$clave]).",
+            $error->getMessage(),
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $transfers->create($params, ['idempotency_key' => null]),
+            'psp->transfers->create necesita idempotency_key',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $transfers->create($params, ['idempotency_key' => 'con espacios']),
+            'idempotency_key tiene que tener de 1 a 255 caracteres ASCII visibles',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['customer' => 8812, 'amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+            ),
+            'customer tiene que ser un string: el id del cliente (pspc_…).',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->create(
+                // @phpstan-ignore argument.type (a propósito: falta customer)
+                ['amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+            ),
+            'customer tiene que ser un string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 123],
+                ['idempotency_key' => 'k'],
+            ),
+            'destination tiene que ser un string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->create(
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                ['customer' => 'pspc_x', 'amount' => true, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+            ),
+            'amount no puede ser un bool',
+        );
+        // El body son customer, amount y destination, nada más (el texto de la transferencia es
+        // fijo), y la clave de idempotencia va en las opciones, nunca entre los parámetros.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x', 'description' => 'y'],
+                ['idempotency_key' => 'k'],
+            ),
+            'psp->transfers->create no acepta "description": los parámetros son customer, amount '
+                . 'y destination.',
+        );
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            self::assertThrows(
+                \TypeError::class,
+                static fn() => $transfers->create(
+                    ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x', $name => 'k'],
+                    ['idempotency_key' => 'k'],
+                ),
+                "psp->transfers->create no acepta {$name} entre los parámetros: va en las "
+                    . 'opciones',
+            );
+        }
+        self::assertSame([], $this->api->requests);
+    }
+
+    public function testPspTransferRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::PSP_TRANSFER_INBOUND);
+        $transfers = $this->api->client()->psp->transfers;
+        $pspTransfer = $transfers->retrieve(Fixtures::PSP_INBOUND_ID);
+        self::assertSame(PspTransfer::class, $pspTransfer::class);
+        self::assertSame(PspTransfer::DIRECTION_INBOUND, $pspTransfer->direction);
+        self::assertSame(
+            [42000, 133.9, 41866.1],
+            [$pspTransfer->amount, $pspTransfer->fee, $pspTransfer->net_amount],
+        );
+        self::assertSame('H6T2Y9P4W1K7N3X8Q5R0ZB', $pspTransfer->reference);
+        self::assertSame('Varios', $pspTransfer->description);
+        self::assertNull($pspTransfer->counterparty->alias);
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/psp/transfers/' . Fixtures::PSP_INBOUND_ID],
+            [$request->method, $request->path],
+        );
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $transfers->retrieve(''),
+            'transferId no puede estar vacío.',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $transfers->retrieve('..'),
+            'transferId no puede ser "." ni "..".',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $transfers->retrieve('pspt_x', ['idempotency_key' => 'k']),
+            'La Idempotency-Key solo va en los POST.',
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
+    public function testPspTransferList(): void
+    {
+        $this->api->add(200, Fixtures::PSP_TRANSFER_LIST);
+        $transfers = $this->api->client()->psp->transfers;
+        // Los filtros en cualquier orden: la query sale en el de la API.
+        $page = $transfers->list([
+            'cursor' => 'c1',
+            'limit' => 2,
+            'created_lt' => '2026-10-25T00:00:00-03:00',
+            'created_gte' => '2026-10-24T00:00:00-03:00',
+            'status' => PspTransfer::STATUS_COMPLETED,
+            'direction' => PspTransfer::DIRECTION_INBOUND,
+            'customer' => Fixtures::PSP_CUSTOMER_ID,
+        ]);
+        self::assertSame(ListObject::class, $page::class);
+        $classes = [];
+        foreach ($page as $pspTransfer) {
+            $classes[] = $pspTransfer::class;
+        }
+        self::assertSame([PspTransfer::class, PspTransfer::class], $classes);
+        self::assertSame(
+            [PspTransfer::DIRECTION_OUTBOUND, PspTransfer::DIRECTION_INBOUND],
+            [$page->data[0]->direction, $page->data[1]->direction],
+        );
+        self::assertNull($page->next_cursor);
+        $request = $this->api->last();
+        self::assertSame(['GET', '/v1/psp/transfers'], [$request->method, $request->path]);
+        self::assertSame(
+            [
+                'customer' => Fixtures::PSP_CUSTOMER_ID,
+                'direction' => 'inbound',
+                'status' => 'completed',
+                'created_gte' => '2026-10-24T00:00:00-03:00',
+                'created_lt' => '2026-10-25T00:00:00-03:00',
+                'limit' => '2',
+                'cursor' => 'c1',
+            ],
+            $request->query,
+        );
+        self::assertNull($request->body);
+        // Sin filtros, sin query; y los filtros son los de la API.
+        $this->api->add(200, Fixtures::PSP_TRANSFER_LIST);
+        $transfers->list();
+        self::assertSame('https://api.raya.cash/v1/psp/transfers', $this->api->last()->url);
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $transfers->list(['cliente' => Fixtures::PSP_CUSTOMER_ID]),
+            'psp->transfers->list no acepta "cliente": los parámetros son customer, direction, '
+                . 'status, created_gte, created_lt, limit y cursor.',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $transfers->list([], ['idempotency_key' => 'k']),
+            'La Idempotency-Key solo va en los POST.',
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    public function testPspBalanceRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::PSP_BALANCE);
+        $balance = $this->api->client()->psp->balance;
+        $pspBalance = $balance->retrieve();
+        self::assertSame(PspBalance::class, $pspBalance::class);
+        self::assertSame(
+            [640200.5, 512875.25, 'ARS'],
+            [$pspBalance->available, $pspBalance->customers_balance, $pspBalance->currency],
+        );
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', 'https://api.raya.cash/v1/psp/balance'],
+            [$request->method, $request->url],
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+        // No tiene filtros: lo único que recibe son las opciones.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $balance->retrieve(['limit' => 1]),
+            'options no acepta "limit"',
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
+    /** Raya PSP todavía no está disponible en el sandbox: con una clave de prueba, 403. */
+    public function testPspSandboxNotSupported(): void
+    {
+        $message = 'Este endpoint todavía no está disponible en un sandbox.';
+        $this->api->addError(403, 'SANDBOX_NOT_SUPPORTED', $message);
+        $psp = $this->api->client(Fixtures::SANDBOX_KEY)->psp;
+        self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $psp->customers->list(),
+            $message,
+            'SANDBOX_NOT_SUPPORTED',
+        );
+        self::assertSame(
+            'Bearer ' . Fixtures::SANDBOX_KEY,
+            $this->api->last()->header('authorization'),
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
     // --- Sandbox: los test helpers, con la clave secreta de prueba ----------------------------
 
     /**
@@ -2274,6 +3404,103 @@ final class EndpointsTest extends TestCase
             'identity->verifications->files recibe 2 argumentos (verificationId y options), no 3: '
                 . "las opciones van en el segundo, como ['api_key' => …].",
         ];
+        $person = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        yield 'psp->customers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->create(
+                $person,
+                [],
+                $options,
+            ),
+            'psp->customers->create recibe 2 argumentos (params y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieve(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->retrieve recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->list' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->list([], [], $options),
+            'psp->customers->list recibe 2 argumentos (params y options), no 3: las opciones van '
+                . "en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->retrieveBalance' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieveBalance(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->retrieveBalance recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->block' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->block(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->block recibe 2 argumentos (customerId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->unblock' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->unblock(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->unblock recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->close' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->close(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->close recibe 2 argumentos (customerId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->customers->recreate' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->recreate(
+                'pspc_x',
+                [],
+                $options,
+            ),
+            'psp->customers->recreate recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->transfers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x'],
+                $key,
+                $options,
+            ),
+            'psp->transfers->create recibe 2 argumentos (params y options), no 3: las opciones van '
+                . "en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->transfers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->retrieve(
+                'pspt_x',
+                [],
+                $options,
+            ),
+            'psp->transfers->retrieve recibe 2 argumentos (transferId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->transfers->list' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->list([], [], $options),
+            'psp->transfers->list recibe 2 argumentos (params y options), no 3: las opciones van '
+                . "en el segundo, como ['api_key' => …].",
+        ];
+        yield 'psp->balance->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->balance->retrieve([], $options),
+            'psp->balance->retrieve recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
         // El único con tres: el id, los parámetros y las opciones.
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(RayaClient $client): mixed => $client->testHelpers->payments
@@ -2402,6 +3629,71 @@ final class EndpointsTest extends TestCase
                 'idv_x',
                 $options,
             ),
+        ];
+        $person = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        yield 'psp->customers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->create(
+                $person,
+                $options,
+            ),
+        ];
+        yield 'psp->customers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieve(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->customers->list' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->list([], $options),
+        ];
+        yield 'psp->customers->retrieveBalance' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieveBalance(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->customers->block' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->block(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->customers->unblock' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->unblock(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->customers->close' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->close(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->customers->recreate' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->recreate(
+                'pspc_x',
+                $options,
+            ),
+        ];
+        yield 'psp->transfers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x'],
+                // @phpstan-ignore argument.type (una lista, a propósito)
+                $options,
+            ),
+        ];
+        yield 'psp->transfers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->retrieve(
+                'pspt_x',
+                $options,
+            ),
+        ];
+        yield 'psp->transfers->list' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->list([], $options),
+        ];
+        yield 'psp->balance->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->balance->retrieve($options),
         ];
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(RayaClient $client): mixed => $client->testHelpers->payments

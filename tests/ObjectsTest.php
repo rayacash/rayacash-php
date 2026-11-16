@@ -16,6 +16,11 @@ use RayaCash\Internal\ObjectToken;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspCustomerBalance;
+use RayaCash\PspDocumentRequest;
+use RayaCash\PspTransfer;
 use RayaCash\RayaCash;
 use RayaCash\RayaObject;
 use RayaCash\Tests\Support\Fixtures;
@@ -317,6 +322,257 @@ final class ObjectsTest extends TestCase
         self::assertSame(Fixtures::VERIFICATION_FILES, $all->toArray());
     }
 
+    /** Un cliente de Raya PSP: su CVU y su decline_reason, con su clase, y la metadata plana. */
+    public function testPspCustomerNestedObjects(): void
+    {
+        $active = self::convertAs(PspCustomer::class, Fixtures::PSP_CUSTOMER_ACTIVE);
+        self::assertSame(Fixtures::PSP_CUSTOMER_ID, $active->id);
+        self::assertSame(['plan' => 'pro'], $active->metadata); // un array común
+        self::assertNull($active->decline_reason);
+        self::assertNull($active->blocked_by);
+        $cvu = $active->cvu;
+        self::assertNotNull($cvu);
+        self::assertSame(PspCustomer\Cvu::class, $cvu::class);
+        self::assertSame(
+            [Fixtures::PSP_ACCOUNT, 'maria_ejemplo', 'MARIA LAURA EJEMPLO', 'active', null],
+            [$cvu->account, $cvu->alias, $cvu->holder_name, $cvu->status, $cvu->closed_at],
+        );
+        self::assertSame([23649.5, 'ARS'], [$active->balance, $active->currency]);
+        // El JSON exacto de la API, ida y vuelta, con sus 15 campos en su orden (sin
+        // terms_accepted_at).
+        self::assertSame(Fixtures::PSP_CUSTOMER_ACTIVE, self::jsonRoundTrip($active));
+        self::assertSame(Fixtures::PSP_CUSTOMER_ACTIVE, $active->toArray());
+        self::assertSame(
+            json_encode(Fixtures::PSP_CUSTOMER_ACTIVE, JSON_THROW_ON_ERROR),
+            json_encode($active, JSON_THROW_ON_ERROR),
+        );
+        self::assertCount(15, $active->toArray());
+        self::assertArrayNotHasKey('terms_accepted_at', $active->toArray());
+
+        $rejected = self::convertAs(PspCustomer::class, Fixtures::PSP_CUSTOMER_REJECTED);
+        self::assertSame(
+            PspCustomer\DeclineReason::class,
+            get_debug_type($rejected->decline_reason),
+        );
+        self::assertSame(PspCustomer::DECLINE_CODE_FACE_MISMATCH, $rejected->decline_reason?->code);
+        self::assertNull($rejected->cvu);
+        self::assertSame(Fixtures::PSP_CUSTOMER_REJECTED, $rejected->toArray());
+
+        $blocked = self::convertAs(PspCustomer::class, Fixtures::PSP_CUSTOMER_BLOCKED);
+        self::assertSame(
+            [PspCustomer::STATUS_BLOCKED, PspCustomer::BLOCKED_BY_ACCOUNT],
+            [$blocked->status, $blocked->blocked_by],
+        );
+        $failed = self::convertAs(PspCustomer::class, Fixtures::PSP_CUSTOMER_FAILED);
+        self::assertSame(
+            [PspCustomer::STATUS_FAILED, PspCustomer::DECLINE_CODE_BANK_REJECTED, null],
+            [$failed->status, $failed->decline_reason?->code, $failed->cvu],
+        );
+        $recreated = self::convertAs(PspCustomer::class, Fixtures::PSP_CUSTOMER_RECREATED);
+        self::assertSame(
+            [Fixtures::PSP_RECREATED_ACCOUNT, 'maria_ejemplo_nuevo', 23649.5],
+            [$recreated->cvu?->account, $recreated->cvu?->alias, $recreated->balance],
+        );
+        $company = self::convertAs(PspCustomer::class, Fixtures::PSP_COMPANY);
+        self::assertSame(
+            [PspCustomer::PERSON_TYPE_J, 'DISTRIBUIDORA EJEMPLO S. A.', null],
+            [$company->person_type, $company->cvu?->holder_name, $company->identity_verification],
+        );
+        $reviewing = self::convertAs(PspCustomer::class, Fixtures::PSP_COMPANY_VERIFYING);
+        self::assertSame(
+            [PspCustomer::STATUS_VERIFYING, null],
+            [$reviewing->status, $reviewing->cvu],
+        );
+        self::assertSame([], $reviewing->metadata);
+    }
+
+    /** Una transferencia de un cliente: la otra cuenta, con su clase, y los montos tal cual. */
+    public function testPspTransferNestedObjects(): void
+    {
+        $inbound = self::convertAs(PspTransfer::class, Fixtures::PSP_TRANSFER_INBOUND);
+        self::assertSame(PspTransfer\Counterparty::class, $inbound->counterparty::class);
+        self::assertSame(
+            ['Juan Ejemplo', '20123456785', '0000123319112992888845', null],
+            [
+                $inbound->counterparty->name,
+                $inbound->counterparty->tax_id,
+                $inbound->counterparty->account,
+                $inbound->counterparty->alias,
+            ],
+        );
+        self::assertSame(
+            [42000, 133.9, 41866.1],
+            [$inbound->amount, $inbound->fee, $inbound->net_amount],
+        );
+        self::assertSame(Fixtures::PSP_CUSTOMER_ID, $inbound->customer);
+        self::assertSame(Fixtures::PSP_TRANSFER_INBOUND, self::jsonRoundTrip($inbound));
+        self::assertSame(Fixtures::PSP_TRANSFER_INBOUND, $inbound->toArray());
+        $outbound = self::convertAs(PspTransfer::class, Fixtures::PSP_TRANSFER_OUTBOUND_PENDING);
+        self::assertSame(['Transferencia', null], [$outbound->description, $outbound->reference]);
+        self::assertSame(
+            json_encode(Fixtures::PSP_TRANSFER_OUTBOUND_PENDING, JSON_THROW_ON_ERROR),
+            json_encode($outbound, JSON_THROW_ON_ERROR),
+        );
+
+        $balance = self::convertAs(PspBalance::class, Fixtures::PSP_BALANCE);
+        self::assertSame([640200.5, 512875.25], [$balance->available, $balance->customers_balance]);
+        $customerBalance = self::convertAs(
+            PspCustomerBalance::class,
+            Fixtures::PSP_CUSTOMER_BALANCE,
+        );
+        self::assertSame(Fixtures::PSP_CUSTOMER_BALANCE, $customerBalance->toArray());
+        $request = self::convertAs(PspDocumentRequest::class, Fixtures::PSP_DOCUMENT_REQUEST);
+        self::assertSame(
+            [PspDocumentRequest::STATUS_OPEN, null, null],
+            [$request->status, $request->submitted_at, $request->closed_at],
+        );
+        self::assertSame(Fixtures::PSP_DOCUMENT_REQUEST, $request->toArray());
+        $closed = self::convertAs(
+            PspDocumentRequest::class,
+            Fixtures::PSP_DOCUMENT_REQUEST_CLOSED,
+        );
+        self::assertSame(
+            [PspDocumentRequest::STATUS_CLOSED, '2026-10-26T09:00:00Z'],
+            [$closed->status, $closed->closed_at],
+        );
+        $failed = self::convertAs(PspTransfer::class, Fixtures::PSP_TRANSFER_FAILED);
+        self::assertSame([PspTransfer::STATUS_FAILED, 61.37], [$failed->status, $failed->fee]);
+    }
+
+    /**
+     * Los cinco objetos de Raya PSP llevan un punto en "object" ("psp.customer"…): se buscan
+     * enteros, también anidados en un objeto sin clase propia.
+     */
+    public function testPspObjectNamesWithADot(): void
+    {
+        self::assertSame(
+            [
+                'psp.customer',
+                'psp.customer_balance',
+                'psp.transfer',
+                'psp.balance',
+                'psp.document_request',
+            ],
+            [
+                PspCustomer::OBJECT_NAME,
+                PspCustomerBalance::OBJECT_NAME,
+                PspTransfer::OBJECT_NAME,
+                PspBalance::OBJECT_NAME,
+                PspDocumentRequest::OBJECT_NAME,
+            ],
+        );
+        self::assertSame(
+            ['verifying', 'pending', 'active', 'blocked', 'closed', 'failed', 'rejected'],
+            [
+                PspCustomer::STATUS_VERIFYING,
+                PspCustomer::STATUS_PENDING,
+                PspCustomer::STATUS_ACTIVE,
+                PspCustomer::STATUS_BLOCKED,
+                PspCustomer::STATUS_CLOSED,
+                PspCustomer::STATUS_FAILED,
+                PspCustomer::STATUS_REJECTED,
+            ],
+        );
+        self::assertSame(
+            [
+                'image_unavailable',
+                'image_invalid',
+                'document_unreadable',
+                'document_sides_mismatch',
+                'document_mismatch',
+                'identity_not_verified',
+                'name_mismatch',
+                'selfie_invalid',
+                'face_mismatch',
+                'verification_unavailable',
+                'not_approved',
+                'bank_rejected',
+                'psp_disabled',
+            ],
+            [
+                PspCustomer::DECLINE_CODE_IMAGE_UNAVAILABLE,
+                PspCustomer::DECLINE_CODE_IMAGE_INVALID,
+                PspCustomer::DECLINE_CODE_DOCUMENT_UNREADABLE,
+                PspCustomer::DECLINE_CODE_DOCUMENT_SIDES_MISMATCH,
+                PspCustomer::DECLINE_CODE_DOCUMENT_MISMATCH,
+                PspCustomer::DECLINE_CODE_IDENTITY_NOT_VERIFIED,
+                PspCustomer::DECLINE_CODE_NAME_MISMATCH,
+                PspCustomer::DECLINE_CODE_SELFIE_INVALID,
+                PspCustomer::DECLINE_CODE_FACE_MISMATCH,
+                PspCustomer::DECLINE_CODE_VERIFICATION_UNAVAILABLE,
+                PspCustomer::DECLINE_CODE_NOT_APPROVED,
+                PspCustomer::DECLINE_CODE_BANK_REJECTED,
+                PspCustomer::DECLINE_CODE_PSP_DISABLED,
+            ],
+        );
+        // Ni uno más: sin gender_mismatch ni GENDER_*, porque el sexo sale del frente del DNI.
+        $names = array_keys((new \ReflectionClass(PspCustomer::class))->getConstants());
+        self::assertCount(13, preg_grep('/\ADECLINE_CODE_/', $names) ?: []);
+        self::assertSame([], preg_grep('/\AGENDER_/', $names));
+        self::assertSame(
+            ['F', 'J', 'account', 'raya'],
+            [
+                PspCustomer::PERSON_TYPE_F,
+                PspCustomer::PERSON_TYPE_J,
+                PspCustomer::BLOCKED_BY_ACCOUNT,
+                PspCustomer::BLOCKED_BY_RAYA,
+            ],
+        );
+        self::assertSame(
+            ['active', 'closing', 'closed'],
+            [
+                PspCustomer\Cvu::STATUS_ACTIVE,
+                PspCustomer\Cvu::STATUS_CLOSING,
+                PspCustomer\Cvu::STATUS_CLOSED,
+            ],
+        );
+        self::assertSame(
+            ['inbound', 'outbound', 'pending', 'completed', 'failed', 'reversed'],
+            [
+                PspTransfer::DIRECTION_INBOUND,
+                PspTransfer::DIRECTION_OUTBOUND,
+                PspTransfer::STATUS_PENDING,
+                PspTransfer::STATUS_COMPLETED,
+                PspTransfer::STATUS_FAILED,
+                PspTransfer::STATUS_REVERSED,
+            ],
+        );
+        self::assertSame(
+            ['open', 'submitted', 'closed'],
+            [
+                PspDocumentRequest::STATUS_OPEN,
+                PspDocumentRequest::STATUS_SUBMITTED,
+                PspDocumentRequest::STATUS_CLOSED,
+            ],
+        );
+        $nested = RayaObject::constructFrom([
+            'customer' => Fixtures::PSP_CUSTOMER_ACTIVE,
+            'customer_balance' => Fixtures::PSP_CUSTOMER_BALANCE,
+            'transfer' => Fixtures::PSP_TRANSFER_INBOUND,
+            'balance' => Fixtures::PSP_BALANCE,
+            'request' => Fixtures::PSP_DOCUMENT_REQUEST,
+            'other' => [...Fixtures::PSP_CUSTOMER_ACTIVE, 'object' => 'psp'],
+        ]);
+        self::assertSame(
+            [
+                PspCustomer::class,
+                PspCustomerBalance::class,
+                PspTransfer::class,
+                PspBalance::class,
+                PspDocumentRequest::class,
+                RayaObject::class,
+            ],
+            [
+                get_debug_type($nested['customer']),
+                get_debug_type($nested['customer_balance']),
+                get_debug_type($nested['transfer']),
+                get_debug_type($nested['balance']),
+                get_debug_type($nested['request']),
+                get_debug_type($nested['other']),
+            ],
+        );
+    }
+
     public function testUserNestedObjects(): void
     {
         $user = self::convertAs(User::class, Fixtures::USER);
@@ -444,6 +700,39 @@ final class ObjectsTest extends TestCase
             ['identity.verification.declined', 'identity.verification.expired'],
             [Event::TYPE_IDENTITY_VERIFICATION_DECLINED, Event::TYPE_IDENTITY_VERIFICATION_EXPIRED],
         );
+    }
+
+    /**
+     * Los eventos de Raya PSP traen el PspCustomer, la PspTransfer o el PspDocumentRequest, cada
+     * uno con su clase.
+     */
+    public function testEventHydratesPspObjects(): void
+    {
+        $activated = Event::constructFrom(Fixtures::EVENT_PSP_CUSTOMER_ACTIVATED);
+        self::assertSame(Event::TYPE_PSP_CUSTOMER_ACTIVATED, $activated->type);
+        $pspCustomer = $activated->data->object;
+        self::assertSame(PspCustomer::class, get_debug_type($pspCustomer));
+        self::assertInstanceOf(PspCustomer::class, $pspCustomer);
+        self::assertSame(PspCustomer\Cvu::class, get_debug_type($pspCustomer->cvu));
+        self::assertTrue($activated->livemode);
+
+        $received = Event::constructFrom(Fixtures::EVENT_PSP_TRANSFER_RECEIVED);
+        self::assertSame('psp.transfer.received', $received->type);
+        $pspTransfer = $received->data->object;
+        self::assertSame(PspTransfer::class, get_debug_type($pspTransfer));
+        self::assertInstanceOf(PspTransfer::class, $pspTransfer);
+        self::assertSame(
+            [PspTransfer::DIRECTION_INBOUND, 42000],
+            [$pspTransfer->direction, $pspTransfer->amount],
+        );
+        self::assertSame(PspTransfer\Counterparty::class, $pspTransfer->counterparty::class);
+
+        $requested = Event::constructFrom(Fixtures::EVENT_PSP_DOCUMENT_REQUEST_CREATED);
+        self::assertSame(Event::TYPE_PSP_DOCUMENT_REQUEST_CREATED, $requested->type);
+        $request = $requested->data->object;
+        self::assertSame(PspDocumentRequest::class, get_debug_type($request));
+        self::assertInstanceOf(PspDocumentRequest::class, $request);
+        self::assertSame(Fixtures::PSP_CUSTOMER_ID, $request->customer);
     }
 
     public function testMetadataKeysCanShadowDictMethods(): void
