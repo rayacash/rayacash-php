@@ -27,6 +27,9 @@ use RayaCash\Internal\Secret;
 use RayaCash\ListObject;
 use RayaCash\OAuth;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspTransfer;
 use RayaCash\RayaCash;
 use RayaCash\RayaClient;
 use RayaCash\Tests\Support\Fixtures;
@@ -524,6 +527,43 @@ final class SecurityTest extends TestCase
             '$verification->cancel' => static fn(): mixed => IdentityVerification::constructFrom(
                 ['object' => 'identity.verification', 'id' => 'idv_x'],
             )->cancel($other),
+            'PspCustomer::create' => static fn(): mixed => PspCustomer::create(
+                ['identity_verification' => Fixtures::VERIFICATION_ID],
+                $other,
+            ),
+            'PspCustomer::retrieve' => static fn(): mixed
+                => PspCustomer::retrieve('pspc_x', $other),
+            'PspCustomer::list' => static fn(): mixed => PspCustomer::list([], $other),
+            'PspCustomer::retrieveBalance' => static fn(): mixed
+                => PspCustomer::retrieveBalance('pspc_x', $other),
+            'PspCustomer::blockById' => static fn(): mixed
+                => PspCustomer::blockById('pspc_x', $other),
+            'PspCustomer::unblockById' => static fn(): mixed
+                => PspCustomer::unblockById('pspc_x', $other),
+            'PspCustomer::closeById' => static fn(): mixed
+                => PspCustomer::closeById('pspc_x', $other),
+            'PspCustomer::recreateById' => static fn(): mixed
+                => PspCustomer::recreateById('pspc_x', $other),
+            '$pspCustomer->block' => static fn(): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => 'pspc_x'],
+            )->block($other),
+            '$pspCustomer->unblock' => static fn(): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => 'pspc_x'],
+            )->unblock($other),
+            '$pspCustomer->close' => static fn(): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => 'pspc_x'],
+            )->close($other),
+            '$pspCustomer->recreate' => static fn(): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => 'pspc_x'],
+            )->recreate($other),
+            'PspTransfer::create' => static fn(): mixed => PspTransfer::create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'proveedor.ejemplo'],
+                ['idempotency_key' => 'k', ...$other],
+            ),
+            'PspTransfer::retrieve' => static fn(): mixed
+                => PspTransfer::retrieve('pspt_x', $other),
+            'PspTransfer::list' => static fn(): mixed => PspTransfer::list([], $other),
+            'PspBalance::retrieve' => static fn(): mixed => PspBalance::retrieve($other),
         ];
         foreach ($global as $name => $call) {
             yield "ApiException de {$name} con una clave por llamada" => [
@@ -1167,6 +1207,57 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             '$verification->cancel recibe 1 argumento (options), no 2',
         ];
+        yield 'psp->customers->create' => [
+            static fn(MockApi $api): mixed => $api->client()->psp->customers->create(
+                ['identity_verification' => Fixtures::VERIFICATION_ID],
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'psp->customers->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'psp->customers->block' => [
+            static fn(MockApi $api): mixed => $api->client()->psp->customers->block(
+                'pspc_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'psp->customers->block recibe 2 argumentos (customerId y options), no 3',
+        ];
+        yield 'psp->transfers->create' => [
+            static fn(MockApi $api): mixed => $api->client()->psp->transfers->create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'psp->transfers->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'psp->balance->retrieve' => [
+            static fn(MockApi $api): mixed => $api->client()->psp->balance->retrieve(
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'psp->balance->retrieve recibe 1 argumento (options), no 2',
+        ];
+        yield 'PspCustomer::closeById' => [
+            static fn(MockApi $api): mixed => PspCustomer::closeById(
+                'pspc_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'PspCustomer::closeById recibe 2 argumentos (customerId y options), no 3',
+        ];
+        yield '$pspCustomer->recreate' => [
+            static fn(MockApi $api): mixed => PspCustomer::constructFrom(
+                ['object' => 'psp.customer', 'id' => 'pspc_x'],
+            )->recreate([], ['api_key' => Fixtures::OTHER_KEY]),
+            \ArgumentCountError::class,
+            '$pspCustomer->recreate recibe 1 argumento (options), no 2',
+        ];
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(MockApi $api): mixed => $api->client()->testHelpers->payments
                 ->simulateTransfer('p', [], [], ['api_key' => Fixtures::OTHER_KEY]),
@@ -1250,6 +1341,32 @@ final class SecurityTest extends TestCase
             \TypeError::class,
             'identity->verifications->list no acepta apiKey entre los parámetros: va en las '
                 . 'opciones',
+        ];
+        yield 'api_key entre los parámetros de psp->customers->create' => [
+            static fn(MockApi $api): mixed => $api->client()->psp->customers->create([
+                'identity_verification' => Fixtures::VERIFICATION_ID,
+                'api_key' => Fixtures::OTHER_KEY,
+            ]),
+            \TypeError::class,
+            'psp->customers->create no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'apiKey entre los parámetros de PspTransfer::create' => [
+            static fn(MockApi $api): mixed => PspTransfer::create(
+                [
+                    'customer' => 'pspc_x',
+                    'amount' => 1,
+                    'destination' => 'x',
+                    'apiKey' => Fixtures::OTHER_KEY,
+                ],
+                ['idempotency_key' => 'k'],
+            ),
+            \TypeError::class,
+            'psp->transfers->create no acepta apiKey entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los filtros de PspCustomer::list' => [
+            static fn(MockApi $api): mixed => PspCustomer::list(['api_key' => Fixtures::OTHER_KEY]),
+            \TypeError::class,
+            'psp->customers->list no acepta api_key entre los parámetros: va en las opciones',
         ];
         yield 'api_key entre los parámetros de oauth->token' => [
             static fn(MockApi $api): mixed => $api->client(null)->oauth->token(

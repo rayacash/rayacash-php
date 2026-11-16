@@ -18,6 +18,10 @@ use RayaCash\ListObject;
 use RayaCash\OAuth;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspCustomerBalance;
+use RayaCash\PspTransfer;
 use RayaCash\RayaCash;
 use RayaCash\Tests\Support\Fixtures;
 use RayaCash\Tests\Support\MockApi;
@@ -323,6 +327,189 @@ final class GlobalTest extends TestCase
         $this->api->add(200, Fixtures::VERIFICATION_CANCELED);
         $verification->cancel(['idempotency_key' => 'c-3']);
         self::assertSame('c-3', $this->api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+    }
+
+    /**
+     * Raya PSP con el estilo global y la clave secreta: cada estático, por su ruta. Por id, las
+     * acciones son blockById(), unblockById(), closeById() y recreateById() (PspCustomer.block(id)
+     * en Python y Node): PHP no deja tener un block() estático y otro de instancia.
+     */
+    public function testPspEndpointsWithTheGlobalStyle(): void
+    {
+        $api = $this->globalApi();
+        $path = '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID;
+        $api->add(201, Fixtures::PSP_CUSTOMER_CREATED);
+        $pspCustomer = PspCustomer::create(
+            ['identity_verification' => Fixtures::VERIFICATION_ID, 'metadata' => ['plan' => 'pro']],
+            ['idempotency_key' => 'alta-1'],
+        );
+        self::assertSame(PspCustomer::class, $pspCustomer::class);
+        self::assertSame(
+            ['identity_verification' => Fixtures::VERIFICATION_ID, 'metadata' => ['plan' => 'pro']],
+            $api->lastJson(),
+        );
+        self::assertSame('alta-1', $api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+
+        $api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        self::assertSame('active', PspCustomer::retrieve(Fixtures::PSP_CUSTOMER_ID)->status);
+        self::assertSame($path, $api->last()->path);
+
+        $api->add(200, Fixtures::PSP_CUSTOMER_LIST);
+        $customers = PspCustomer::list(['status' => 'active', 'limit' => 2]);
+        self::assertSame(ListObject::class, $customers::class);
+        self::assertSame(PspCustomer::class, $customers->data[0]::class);
+        self::assertSame(['status' => 'active', 'limit' => '2'], $api->last()->query);
+
+        $api->add(200, Fixtures::PSP_CUSTOMER_BALANCE);
+        $customerBalance = PspCustomer::retrieveBalance(Fixtures::PSP_CUSTOMER_ID);
+        self::assertSame(PspCustomerBalance::class, $customerBalance::class);
+        self::assertSame($path . '/balance', $api->last()->path);
+
+        $api->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        $blocked = PspCustomer::blockById(Fixtures::PSP_CUSTOMER_ID, ['idempotency_key' => 'b-1']);
+        self::assertSame('blocked', $blocked->status);
+        self::assertSame(
+            [$path . '/block', 'b-1'],
+            [$api->last()->path, $api->last()->header('idempotency-key')],
+        );
+        $api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        self::assertSame('active', PspCustomer::unblockById(Fixtures::PSP_CUSTOMER_ID)->status);
+        self::assertSame($path . '/unblock', $api->last()->path);
+        $api->add(200, Fixtures::PSP_CUSTOMER_CLOSED);
+        self::assertSame('closed', PspCustomer::closeById(Fixtures::PSP_CUSTOMER_ID)->status);
+        self::assertSame($path . '/close', $api->last()->path);
+        $api->add(202, Fixtures::PSP_CUSTOMER_PENDING);
+        self::assertSame('pending', PspCustomer::recreateById(Fixtures::PSP_CUSTOMER_ID)->status);
+        self::assertSame($path . '/recreate', $api->last()->path);
+        self::assertNull($api->last()->body);
+
+        $api->add(201, Fixtures::PSP_TRANSFER_OUTBOUND_PENDING);
+        $pspTransfer = PspTransfer::create(
+            [
+                'customer' => Fixtures::PSP_CUSTOMER_ID,
+                'amount' => 18350.5,
+                'destination' => 'proveedor.ejemplo',
+            ],
+            ['idempotency_key' => 't-1'],
+        );
+        self::assertSame(PspTransfer::class, $pspTransfer::class);
+        self::assertSame(
+            [
+                'customer' => Fixtures::PSP_CUSTOMER_ID,
+                'amount' => 18350.5,
+                'destination' => 'proveedor.ejemplo',
+            ],
+            $api->lastJson(),
+        );
+        self::assertSame('t-1', $api->last()->header('idempotency-key'));
+
+        $api->add(200, Fixtures::PSP_TRANSFER_INBOUND);
+        self::assertSame('inbound', PspTransfer::retrieve(Fixtures::PSP_INBOUND_ID)->direction);
+        self::assertSame('/v1/psp/transfers/' . Fixtures::PSP_INBOUND_ID, $api->last()->path);
+
+        $api->add(200, Fixtures::PSP_TRANSFER_LIST);
+        $transfers = PspTransfer::list(['customer' => Fixtures::PSP_CUSTOMER_ID]);
+        self::assertSame(PspTransfer::class, $transfers->data[0]::class);
+        self::assertSame(['customer' => Fixtures::PSP_CUSTOMER_ID], $api->last()->query);
+
+        $api->add(200, Fixtures::PSP_BALANCE);
+        $pspBalance = PspBalance::retrieve();
+        self::assertSame(PspBalance::class, $pspBalance::class);
+        self::assertSame('/v1/psp/balance', $api->last()->path);
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+        self::assertCount(12, $api->requests);
+    }
+
+    /**
+     * $pspCustomer->block(), unblock(), close() y recreate() devuelven un cliente nuevo y usan el
+     * cliente del que vino (o el estilo global).
+     */
+    public function testPspCustomerInstanceActions(): void
+    {
+        $this->globalApi();
+        $path = '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID;
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        $pspCustomer = PspCustomer::retrieve(Fixtures::PSP_CUSTOMER_ID);
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        $blocked = $pspCustomer->block();
+        self::assertSame(['blocked', 'active'], [$blocked->status, $pspCustomer->status]);
+        self::assertSame($path . '/block', $this->api->last()->path);
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        self::assertSame('active', $blocked->unblock(['idempotency_key' => 'u-1'])->status);
+        self::assertSame($path . '/unblock', $this->api->last()->path);
+        self::assertSame('u-1', $this->api->last()->header('idempotency-key'));
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_CLOSED);
+        $closed = $pspCustomer->close();
+        self::assertSame($path . '/close', $this->api->last()->path);
+        $this->api->add(202, Fixtures::PSP_CUSTOMER_PENDING);
+        self::assertSame('pending', $closed->recreate()->status);
+        self::assertSame($path . '/recreate', $this->api->last()->path);
+        self::assertNull($this->api->last()->body);
+
+        // Con el cliente del que vino, no con el estilo global.
+        $otherApi = new MockApi();
+        $otherApi->add(200, Fixtures::PSP_CUSTOMER_ACTIVE);
+        $fromClient = $otherApi->client(Fixtures::OTHER_KEY)->psp->customers->retrieve(
+            Fixtures::PSP_CUSTOMER_ID,
+        );
+        $otherApi->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        $fromClient->block(['idempotency_key' => 'b-2']);
+        $request = $otherApi->last();
+        self::assertSame('Bearer ' . Fixtures::OTHER_KEY, $request->header('authorization'));
+        self::assertSame('b-2', $request->header('idempotency-key'));
+        self::assertSame($path . '/block', $request->path);
+        self::assertCount(5, $this->api->requests);
+
+        $error = self::assertThrows(
+            \Error::class,
+            // @phpstan-ignore method.staticCall, argument.type (como PspCustomer.block(id))
+            static fn() => PspCustomer::block(Fixtures::PSP_CUSTOMER_ID),
+            'cannot be called statically',
+        );
+        self::assertSame(\Error::class, $error::class);
+        $actions = [
+            'bloquear' => static fn(PspCustomer $customer): mixed => $customer->block(),
+            'desbloquear' => static fn(PspCustomer $customer): mixed => $customer->unblock(),
+            'dar de baja su CVU' => static fn(PspCustomer $customer): mixed => $customer->close(),
+            'recrear su CVU' => static fn(PspCustomer $customer): mixed => $customer->recreate(),
+        ];
+        $withoutId = [
+            [],
+            ['object' => 'psp.customer', 'id' => ''],
+            ['object' => 'psp.customer', 'id' => null],
+            ['object' => 'psp.customer', 'id' => 8812],
+        ];
+        foreach ($actions as $what => $action) {
+            foreach ($withoutId as $values) {
+                self::assertThrows(
+                    \ValueError::class,
+                    static fn() => $action(PspCustomer::constructFrom($values)),
+                    "Este PspCustomer no tiene id: no se puede {$what}.",
+                );
+            }
+        }
+        self::assertCount(5, $this->api->requests);
+    }
+
+    /** Un evento de Raya PSP del estilo global: su cliente se bloquea con la clave global. */
+    public function testPspEventsFromWebhookConstructEventUseTheGlobalStyle(): void
+    {
+        $this->globalApi();
+        $body = json_encode(Fixtures::EVENT_PSP_CUSTOMER_ACTIVATED, JSON_THROW_ON_ERROR);
+        $header = WebhookSignature::generateHeader($body, Fixtures::WEBHOOK_SECRET);
+        $event = Webhook::constructEvent($body, $header, Fixtures::WEBHOOK_SECRET);
+        $pspCustomer = $event->data->object;
+        self::assertInstanceOf(PspCustomer::class, $pspCustomer);
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        $pspCustomer->block(['idempotency_key' => 'b-3']);
+        self::assertSame(
+            '/v1/psp/customers/' . Fixtures::PSP_CUSTOMER_ID . '/block',
+            $this->api->last()->path,
+        );
+        self::assertSame('b-3', $this->api->last()->header('idempotency-key'));
         self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
     }
 
@@ -876,6 +1063,95 @@ final class GlobalTest extends TestCase
                 Fixtures::VERIFICATION_PENDING,
             )->cancel([], $options),
             '$verification->cancel recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        $person = ['identity_verification' => Fixtures::VERIFICATION_ID];
+        yield 'PspCustomer::create' => [
+            static fn(): mixed => PspCustomer::create($person, [], $options),
+            'PspCustomer::create recibe 2 argumentos (params y options), no 3: las opciones van en '
+                . "el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::retrieve' => [
+            static fn(): mixed => PspCustomer::retrieve('pspc_x', [], $options),
+            'PspCustomer::retrieve recibe 2 argumentos (customerId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::list' => [
+            static fn(): mixed => PspCustomer::list([], [], $options),
+            'PspCustomer::list recibe 2 argumentos (params y options), no 3: las opciones van en '
+                . "el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::retrieveBalance' => [
+            static fn(): mixed => PspCustomer::retrieveBalance('pspc_x', [], $options),
+            'PspCustomer::retrieveBalance recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::blockById' => [
+            static fn(): mixed => PspCustomer::blockById('pspc_x', [], $options),
+            'PspCustomer::blockById recibe 2 argumentos (customerId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::unblockById' => [
+            static fn(): mixed => PspCustomer::unblockById('pspc_x', [], $options),
+            'PspCustomer::unblockById recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::closeById' => [
+            static fn(): mixed => PspCustomer::closeById('pspc_x', [], $options),
+            'PspCustomer::closeById recibe 2 argumentos (customerId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspCustomer::recreateById' => [
+            static fn(): mixed => PspCustomer::recreateById('pspc_x', [], $options),
+            'PspCustomer::recreateById recibe 2 argumentos (customerId y options), no 3: las '
+                . "opciones van en el segundo, como ['api_key' => …].",
+        ];
+        yield '$pspCustomer->block' => [
+            static fn(): mixed => PspCustomer::constructFrom(Fixtures::PSP_CUSTOMER_ACTIVE)
+                ->block([], $options),
+            '$pspCustomer->block recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        yield '$pspCustomer->unblock' => [
+            static fn(): mixed => PspCustomer::constructFrom(Fixtures::PSP_CUSTOMER_BLOCKED)
+                ->unblock([], $options),
+            '$pspCustomer->unblock recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        yield '$pspCustomer->close' => [
+            static fn(): mixed => PspCustomer::constructFrom(Fixtures::PSP_CUSTOMER_ACTIVE)
+                ->close([], $options),
+            '$pspCustomer->close recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        yield '$pspCustomer->recreate' => [
+            static fn(): mixed => PspCustomer::constructFrom(Fixtures::PSP_CUSTOMER_CLOSED)
+                ->recreate([], $options),
+            '$pspCustomer->recreate recibe 1 argumento (options), no 2: las opciones van en el '
+                . "primero, como ['api_key' => …].",
+        ];
+        yield 'PspTransfer::create' => [
+            static fn(): mixed => PspTransfer::create(
+                ['customer' => 'pspc_x', 'amount' => 1, 'destination' => 'x'],
+                $key,
+                $options,
+            ),
+            'PspTransfer::create recibe 2 argumentos (params y options), no 3: las opciones van en '
+                . "el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspTransfer::retrieve' => [
+            static fn(): mixed => PspTransfer::retrieve('pspt_x', [], $options),
+            'PspTransfer::retrieve recibe 2 argumentos (transferId y options), no 3: las opciones '
+                . "van en el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspTransfer::list' => [
+            static fn(): mixed => PspTransfer::list([], [], $options),
+            'PspTransfer::list recibe 2 argumentos (params y options), no 3: las opciones van en '
+                . "el segundo, como ['api_key' => …].",
+        ];
+        yield 'PspBalance::retrieve' => [
+            static fn(): mixed => PspBalance::retrieve([], $options),
+            'PspBalance::retrieve recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
         ];
     }

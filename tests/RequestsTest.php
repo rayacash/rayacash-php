@@ -567,6 +567,59 @@ final class RequestsTest extends TestCase
             Fixtures::VERIFICATION_PENDING,
             'una lista',
         ];
+        yield 'psp->customers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->create(
+                ['identity_verification' => Fixtures::VERIFICATION_ID],
+            ),
+            Fixtures::VERIFICATION_VERIFIED,
+            'un cliente de Raya PSP',
+        ];
+        yield 'psp->customers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieve(
+                Fixtures::PSP_CUSTOMER_ID,
+            ),
+            Fixtures::PSP_CUSTOMER_BALANCE,
+            'un cliente de Raya PSP',
+        ];
+        yield 'psp->customers->retrieveBalance' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->retrieveBalance(
+                Fixtures::PSP_CUSTOMER_ID,
+            ),
+            Fixtures::PSP_BALANCE,
+            'el saldo de un cliente',
+        ];
+        yield 'psp->customers->block' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->block(
+                Fixtures::PSP_CUSTOMER_ID,
+            ),
+            Fixtures::EVENT_PSP_CUSTOMER_ACTIVATED,
+            'un cliente de Raya PSP',
+        ];
+        yield 'psp->customers->list' => [
+            static fn(RayaClient $client): mixed => $client->psp->customers->list(),
+            Fixtures::PSP_CUSTOMER_ACTIVE,
+            'una lista',
+        ];
+        yield 'psp->transfers->create' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->create(
+                ['customer' => Fixtures::PSP_CUSTOMER_ID, 'amount' => 1, 'destination' => 'x'],
+                ['idempotency_key' => 'k'],
+            ),
+            Fixtures::TRANSFER_OUTBOUND_PENDING,
+            'una transferencia de un cliente',
+        ];
+        yield 'psp->transfers->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->transfers->retrieve(
+                Fixtures::PSP_INBOUND_ID,
+            ),
+            Fixtures::PSP_DOCUMENT_REQUEST,
+            'una transferencia de un cliente',
+        ];
+        yield 'psp->balance->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->psp->balance->retrieve(),
+            Fixtures::BALANCE,
+            'el saldo de Raya PSP',
+        ];
     }
 
     /**

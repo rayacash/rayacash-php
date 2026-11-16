@@ -31,8 +31,9 @@ use RayaCash\Tests\Support\TestCase;
 final class ErrorsTest extends TestCase
 {
     /**
-     * Los 51 códigos del contrato (api.md › Códigos de error), con los de Identidad
-     * (IDENTITY_NOT_ACTIVATED al final de los 403) y los del sandbox.
+     * Los 58 códigos del contrato (api.md › Códigos de error), con los de Identidad
+     * (IDENTITY_NOT_ACTIVATED al final de los 403), los del sandbox y los 7 de Raya PSP, cada uno
+     * al final de su bloque de HTTP.
      */
     private const CATALOG = [
         ['INVALID_JSON', 400, InvalidRequestException::class],
@@ -60,6 +61,7 @@ final class ErrorsTest extends TestCase
         ['SANDBOX_NOT_SUPPORTED', 403, PermissionDeniedException::class],
         ['SANDBOX_ONLY', 403, PermissionDeniedException::class],
         ['IDENTITY_NOT_ACTIVATED', 403, PermissionDeniedException::class],
+        ['PSP_NOT_ACTIVATED', 403, PermissionDeniedException::class],
         ['TRANSFER_NOT_FOUND', 404, NotFoundException::class],
         ['PAYMENT_NOT_FOUND', 404, NotFoundException::class],
         ['USER_NOT_FOUND', 404, NotFoundException::class],
@@ -67,12 +69,15 @@ final class ErrorsTest extends TestCase
         ['NOT_FOUND', 404, NotFoundException::class],
         ['PAYOUT_NOT_FOUND', 404, NotFoundException::class],
         ['VERIFICATION_NOT_FOUND', 404, NotFoundException::class],
+        ['CUSTOMER_NOT_FOUND', 404, NotFoundException::class],
         ['METHOD_NOT_ALLOWED', 405, InvalidRequestException::class],
         ['IDEMPOTENCY_KEY_REUSED', 409, IdempotencyException::class],
         ['IDEMPOTENCY_KEY_IN_USE', 409, IdempotencyException::class],
         ['PAYMENT_NOT_REFUNDABLE', 409, ConflictException::class],
         ['PAYMENT_NOT_PENDING', 409, ConflictException::class],
         ['VERIFICATION_NOT_CANCELABLE', 409, ConflictException::class],
+        ['CUSTOMER_ALREADY_EXISTS', 409, ConflictException::class],
+        ['CUSTOMER_STATUS_CONFLICT', 409, ConflictException::class],
         ['REQUEST_TOO_LARGE', 413, InvalidRequestException::class],
         ['INSUFFICIENT_BALANCE', 422, UnprocessableEntityException::class],
         ['LIMIT_EXCEEDED', 422, UnprocessableEntityException::class],
@@ -80,6 +85,9 @@ final class ErrorsTest extends TestCase
         ['DESTINATION_INACTIVE', 422, UnprocessableEntityException::class],
         ['DESTINATION_NOT_SUPPORTED', 422, UnprocessableEntityException::class],
         ['REFUND_FAILED', 422, UnprocessableEntityException::class],
+        ['CUSTOMER_INSUFFICIENT_BALANCE', 422, UnprocessableEntityException::class],
+        ['CUSTOMER_DATA_MISMATCH', 422, UnprocessableEntityException::class],
+        ['TAX_ID_NOT_REGISTERED', 422, UnprocessableEntityException::class],
         ['RATE_LIMITED', 429, RateLimitException::class],
         ['INTERNAL_ERROR', 500, ApiException::class],
         ['BANK_UNAVAILABLE', 503, ApiException::class],
@@ -90,9 +98,9 @@ final class ErrorsTest extends TestCase
 
     private const PARAMETER_INVALID = 'amount tiene que ser un número con hasta 2 decimales.';
 
-    public function testCatalogHasThe51Codes(): void
+    public function testCatalogHasThe58Codes(): void
     {
-        self::assertCount(51, array_unique(array_column(self::CATALOG, 0)));
+        self::assertCount(58, array_unique(array_column(self::CATALOG, 0)));
     }
 
     /** @return iterable<string, array{string, int, class-string<RayaException>}> */
@@ -239,6 +247,98 @@ final class ErrorsTest extends TestCase
         self::assertSame(ConflictException::class, $error::class);
         self::assertSame('VERIFICATION_NOT_CANCELABLE', $error->getErrorCode());
         self::assertSame(['status' => 'processing'], $error->getData());
+    }
+
+    /**
+     * Los 7 códigos de Raya PSP, con el mensaje exacto de la API (publicapi/errors.py) y su data:
+     * la clase sale del status y el mensaje y la data llegan tal cual.
+     *
+     * @return iterable<string, array{
+     *     int,
+     *     string,
+     *     string,
+     *     array<string, string>|null,
+     *     class-string<RayaException>,
+     * }>
+     */
+    public static function pspCodes(): iterable
+    {
+        yield 'PSP_NOT_ACTIVATED' => [
+            403,
+            'PSP_NOT_ACTIVATED',
+            'Raya PSP todavía no está activado para tu cuenta. Activalo o mirá el estado de tu '
+                . 'solicitud en Negocios › Raya PSP.',
+            null,
+            PermissionDeniedException::class,
+        ];
+        yield 'CUSTOMER_NOT_FOUND' => [
+            404,
+            'CUSTOMER_NOT_FOUND',
+            'No encontramos ese cliente.',
+            ['field' => 'customer'],
+            NotFoundException::class,
+        ];
+        yield 'CUSTOMER_ALREADY_EXISTS' => [
+            409,
+            'CUSTOMER_ALREADY_EXISTS',
+            'Ya tenés un cliente con ese CUIL o CUIT.',
+            ['customer' => 'pspc_7Hq2Lm9Xw4Tz1Bv8Nc3Kd6Rf'],
+            ConflictException::class,
+        ];
+        yield 'CUSTOMER_STATUS_CONFLICT' => [
+            409,
+            'CUSTOMER_STATUS_CONFLICT',
+            'El cliente no está en un estado que permita esta operación. Revisá su status.',
+            ['status' => 'blocked', 'blocked_by' => 'raya'],
+            ConflictException::class,
+        ];
+        yield 'CUSTOMER_INSUFFICIENT_BALANCE' => [
+            422,
+            'CUSTOMER_INSUFFICIENT_BALANCE',
+            'Tu cliente no tiene saldo suficiente para esta transferencia.',
+            null,
+            UnprocessableEntityException::class,
+        ];
+        // Solo de una persona jurídica: la razón social (name) contra el Registro Nacional de
+        // Sociedades.
+        yield 'CUSTOMER_DATA_MISMATCH' => [
+            422,
+            'CUSTOMER_DATA_MISMATCH',
+            'Los datos del cliente no coinciden con los registros oficiales.',
+            ['field' => 'name'],
+            UnprocessableEntityException::class,
+        ];
+        yield 'TAX_ID_NOT_REGISTERED' => [
+            422,
+            'TAX_ID_NOT_REGISTERED',
+            'No encontramos ese CUIT en el Registro Nacional de Sociedades.',
+            null,
+            UnprocessableEntityException::class,
+        ];
+    }
+
+    /**
+     * @param array<string, string>|null $data
+     * @param class-string<RayaException> $class
+     */
+    #[DataProvider('pspCodes')]
+    public function testPspCodesKeepTheirMessageAndData(
+        int $status,
+        string $code,
+        string $message,
+        ?array $data,
+        string $class,
+    ): void {
+        $error = self::makeError(
+            $status,
+            ['error' => ['code' => $code, 'message' => $message, 'data' => $data]],
+        );
+        self::assertSame($class, $error::class);
+        self::assertSame($code, $error->getErrorCode());
+        self::assertSame($message, $error->getMessage());
+        self::assertSame($data, $error->getData());
+        // Ninguno se reintenta: un 4xx no cambia con otro intento.
+        self::assertFalse(Retry::shouldRetryResponse($status, $code, null));
     }
 
     /** El tope de verificaciones de Identidad: RATE_LIMITED con data.limit y Retry-After. */

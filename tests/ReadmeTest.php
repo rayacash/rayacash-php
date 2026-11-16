@@ -19,6 +19,11 @@ use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspCustomerBalance;
+use RayaCash\PspDocumentRequest;
+use RayaCash\PspTransfer;
 use RayaCash\RayaClient;
 use RayaCash\RayaObject;
 use RayaCash\Tests\Support\TestCase;
@@ -57,7 +62,18 @@ final class ReadmeTest extends TestCase
         'connectPayout' => [ConnectPayout::class],
         'verification' => [IdentityVerification::class],
         'files' => [IdentityVerificationFiles::class],
-        'object' => [Payment::class, Transfer::class, ConnectOrder::class],
+        'pspCustomer' => [PspCustomer::class],
+        'customerBalance' => [PspCustomerBalance::class],
+        'pspTransfer' => [PspTransfer::class],
+        'pspBalance' => [PspBalance::class],
+        'object' => [
+            Payment::class,
+            Transfer::class,
+            ConnectOrder::class,
+            PspCustomer::class,
+            PspTransfer::class,
+            PspDocumentRequest::class,
+        ],
         'page' => [ListObject::class],
         'event' => [Event::class],
         'e' => [
@@ -84,6 +100,34 @@ final class ReadmeTest extends TestCase
         'today',
         'account',
         'customer',
+        'withdrawal',
+    ];
+
+    /** Los 7 códigos de error de Raya PSP: van en la tabla de «Errores». */
+    private const PSP_CODES = [
+        'PSP_NOT_ACTIVATED',
+        'CUSTOMER_NOT_FOUND',
+        'CUSTOMER_ALREADY_EXISTS',
+        'CUSTOMER_STATUS_CONFLICT',
+        'CUSTOMER_INSUFFICIENT_BALANCE',
+        'CUSTOMER_DATA_MISMATCH',
+        'TAX_ID_NOT_REGISTERED',
+    ];
+
+    /** Los 12 eventos de Raya PSP: van en «Webhooks». */
+    private const PSP_EVENTS = [
+        'psp.customer.activated',
+        'psp.customer.updated',
+        'psp.customer.failed',
+        'psp.customer.rejected',
+        'psp.customer.blocked',
+        'psp.customer.unblocked',
+        'psp.customer.closed',
+        'psp.transfer.received',
+        'psp.transfer.sent',
+        'psp.transfer.failed',
+        'psp.document_request.created',
+        'psp.document_request.closed',
     ];
 
     public function testTheReadmeHasPhpExamples(): void
@@ -228,6 +272,116 @@ final class ReadmeTest extends TestCase
             '/^7\. \*\*Para verificar la identidad.*disponible en el \[sandbox\]\(#sandbox\):/mu',
             $readme,
         );
+    }
+
+    /**
+     * «Raya PSP», entre Identidad y Sandbox: el índice, el link a la referencia, el flujo en orden
+     * y ningún precio; los 7 códigos en «Errores» y los 12 eventos en «Webhooks».
+     */
+    public function testThePspSectionTellsTheFlowTheErrorsAndTheEvents(): void
+    {
+        $readme = self::readme();
+        self::assertStringContainsString(
+            "- [Identidad](#identidad)\n- [Raya PSP](#raya-psp)\n- [Sandbox](#sandbox)\n",
+            $readme,
+        );
+        $psp = self::section($readme, 'Raya PSP');
+        self::assertStringContainsString('https://raya.cash/api/psp', $psp);
+        self::assertStringContainsString('`$client->psp` existe desde la 1.3.0.', $psp);
+        $position = 0;
+        foreach (
+            [
+                'psp->customers->create(',
+                'psp.customer.activated',
+                'psp->customers->retrieve(',
+                'psp->transfers->create(',
+                'psp.transfer.received',
+                'psp->customers->block(',
+                'psp->customers->list(',
+            ] as $step
+        ) {
+            $found = strpos($psp, $step);
+            self::assertNotFalse($found, $step);
+            self::assertGreaterThan($position, $found, "{$step} va después del paso anterior");
+            $position = $found;
+        }
+        // Sin precios: la comisión no se escribe, y ningún monto lleva signo de pesos.
+        self::assertDoesNotMatchRegularExpression('/\$\s?\d/', $psp);
+        self::assertStringContainsString('`INSUFFICIENT_BALANCE`', $psp);
+        self::assertStringContainsString('`CUSTOMER_INSUFFICIENT_BALANCE`', $psp);
+        $errors = self::section($readme, 'Errores');
+        foreach (self::PSP_CODES as $code) {
+            self::assertStringContainsString("`{$code}`", $errors, $code);
+            self::assertStringContainsString("`{$code}`", $psp, $code);
+        }
+        $webhooks = self::section($readme, 'Webhooks');
+        foreach (self::PSP_EVENTS as $type) {
+            self::assertStringContainsString("`{$type}`", $webhooks, $type);
+            self::assertStringContainsString("`{$type}`", $psp, $type);
+        }
+        // En el sandbox todavía no está.
+        self::assertStringContainsString(
+            'Identidad y Raya PSP (`psp`): con una clave de prueba responden 403',
+            self::section($readme, 'Sandbox'),
+        );
+    }
+
+    /**
+     * Los status de recreate, como los devuelve la API: 200 con active o failed y 202 con
+     * pending. El 201 es solo del alta (create).
+     */
+    public function testThePspSectionGivesRecreateTheStatusesOfTheApi(): void
+    {
+        $psp = self::section(self::readme(), 'Raya PSP');
+        self::assertStringContainsString(
+            '| `POST /v1/psp/customers/:id/recreate` | `PspCustomer`: `active` o `failed` '
+                . '(HTTP 200), `pending` (HTTP 202) |',
+            $psp,
+        );
+        self::assertStringContainsString(
+            'y su historial, y responde `200` con `active` o `failed`, o `202` con `pending`.',
+            $psp,
+        );
+        self::assertStringContainsString(
+            '| `POST /v1/psp/customers` | `PspCustomer`: `active` o `failed` (HTTP 201), '
+                . '`verifying` o `pending` (HTTP 202) |',
+            $psp,
+        );
+    }
+
+    /**
+     * Crear un cliente tiene tres formas (A7): con Raya Identity va solo identity_verification (el
+     * ejemplo no manda ni tax_id ni name ni person_type), con las fotos van los datos y las tres
+     * URLs (sin gender: el sexo sale del DNI) y una persona jurídica va sin fotos. Por eso
+     * CUSTOMER_DATA_MISMATCH queda solo para la razón social y CUSTOMER_ALREADY_EXISTS también
+     * vale para una verificación que ya usaste.
+     */
+    public function testThePspSectionTellsTheThreeWaysToCreateACustomer(): void
+    {
+        $readme = self::readme();
+        $psp = self::section($readme, 'Raya PSP');
+        foreach (
+            [
+                '| Se verificó con Raya Identity | Solo `identity_verification` |',
+                '| Es una persona humana y lo verificaste vos (tu propio KYC o el de otro '
+                    . 'proveedor) | `tax_id`, `name`, `person_type` `F`, `document_front_url`, '
+                    . '`document_back_url` y `selfie_url` |',
+                '| Es una persona jurídica | `tax_id`, `name` y `person_type` `J` |',
+                "\$pspCustomer = \$client->psp->customers->create(\n    [\n"
+                    . "        'identity_verification' => 'idv_3kT9vQ2mXw7Lp0aBcD4eF6gH',\n"
+                    . "        'external_reference' => 'cliente-8812', // tu id del cliente, sin "
+                    . "datos personales\n"
+                    . "        'metadata' => ['plan' => 'pro'],\n    ],\n",
+                'si la razón social no coincide, `CUSTOMER_DATA_MISMATCH`, con `name` en '
+                    . "`\$e->getData()['field']`",
+                'Si ya tenés un cliente con ese CUIL o CUIT, o con esa verificación, '
+                    . '`CUSTOMER_ALREADY_EXISTS`',
+            ] as $text
+        ) {
+            self::assertStringContainsString($text, $psp, $text);
+        }
+        self::assertStringNotContainsString("'tax_id' =>", $psp);
+        self::assertStringNotContainsStringIgnoringCase('gender', $readme);
     }
 
     public function testTheSourcesDoNotNameOtherProviders(): void
@@ -388,6 +542,15 @@ final class ReadmeTest extends TestCase
     private static function readme(): string
     {
         return (string) file_get_contents(dirname(__DIR__) . '/README.md');
+    }
+
+    /** Una sección del README: desde su «## Título» hasta la siguiente «## ». */
+    private static function section(string $readme, string $title): string
+    {
+        $start = strpos($readme, "\n## {$title}\n");
+        self::assertNotFalse($start, "El README no tiene la sección «{$title}».");
+        $end = strpos($readme, "\n## ", $start + 1);
+        return substr($readme, $start, $end === false ? null : $end - $start);
     }
 
     /**

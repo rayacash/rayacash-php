@@ -7,12 +7,13 @@ namespace RayaCash;
 /**
  * Un evento de webhook. Armalo con `Webhook::constructEvent(…)` o `$client->constructEvent(…)`.
  *
- * `$event->data->object` es el Transfer, el Payment, el ConnectOrder o la IdentityVerification
- * tal como estaba cuando ocurrió el evento. Los connect.order.* le llegan al dueño de la app (la
- * cuenta conectada recibe sus payment.*), y los identity.verification.* traen la verificación
- * con person siempre en null: para leerlo, pedí la verificación con retrieve(). webhook.test (el
- * botón «Enviar evento de prueba») trae `{"object": "test", …}`: respondé 2xx e ignoralo. Pueden
- * sumarse tipos nuevos: tu código tiene que ignorarlos.
+ * `$event->data->object` es el Transfer, el Payment, el ConnectOrder, la IdentityVerification,
+ * el PspCustomer, la PspTransfer o el PspDocumentRequest tal como estaba cuando ocurrió el
+ * evento. Los connect.order.* le llegan al dueño de la app (la cuenta conectada recibe sus
+ * payment.*), y los identity.verification.* traen la verificación con person siempre en null:
+ * para leerlo, pedí la verificación con retrieve(). Los psp.* son de los clientes de tu empresa
+ * en Raya PSP. webhook.test (el botón «Enviar evento de prueba») trae `{"object": "test", …}`:
+ * respondé 2xx e ignoralo. Pueden sumarse tipos nuevos: tu código tiene que ignorarlos.
  *
  * @property-read string $id evt_…: el mismo valor que el header Raya-Event-Id. Procesalo una vez.
  * @property-read 'event' $object
@@ -22,6 +23,10 @@ namespace RayaCash;
  *     |'connect.order.succeeded'|'connect.order.failed'|'connect.order.refunded'
  *     |'identity.verification.verified'|'identity.verification.declined'
  *     |'identity.verification.expired'|'identity.verification.canceled'
+ *     |'psp.customer.activated'|'psp.customer.updated'|'psp.customer.failed'
+ *     |'psp.customer.rejected'|'psp.customer.blocked'|'psp.customer.unblocked'
+ *     |'psp.customer.closed'|'psp.transfer.received'|'psp.transfer.sent'
+ *     |'psp.transfer.failed'|'psp.document_request.created'|'psp.document_request.closed'
  *     |'webhook.test'|'checkout.created'|'checkout.succeeded'|'checkout.failed'
  *     |'checkout.refunded'
  * ) $type Los checkout.* son los nombres de la 1.1.0 de los connect.order.*: la API ya no los
@@ -52,6 +57,18 @@ final class Event extends RayaObject
     public const TYPE_IDENTITY_VERIFICATION_DECLINED = 'identity.verification.declined';
     public const TYPE_IDENTITY_VERIFICATION_EXPIRED = 'identity.verification.expired';
     public const TYPE_IDENTITY_VERIFICATION_CANCELED = 'identity.verification.canceled';
+    public const TYPE_PSP_CUSTOMER_ACTIVATED = 'psp.customer.activated';
+    public const TYPE_PSP_CUSTOMER_UPDATED = 'psp.customer.updated';
+    public const TYPE_PSP_CUSTOMER_FAILED = 'psp.customer.failed';
+    public const TYPE_PSP_CUSTOMER_REJECTED = 'psp.customer.rejected';
+    public const TYPE_PSP_CUSTOMER_BLOCKED = 'psp.customer.blocked';
+    public const TYPE_PSP_CUSTOMER_UNBLOCKED = 'psp.customer.unblocked';
+    public const TYPE_PSP_CUSTOMER_CLOSED = 'psp.customer.closed';
+    public const TYPE_PSP_TRANSFER_RECEIVED = 'psp.transfer.received';
+    public const TYPE_PSP_TRANSFER_SENT = 'psp.transfer.sent';
+    public const TYPE_PSP_TRANSFER_FAILED = 'psp.transfer.failed';
+    public const TYPE_PSP_DOCUMENT_REQUEST_CREATED = 'psp.document_request.created';
+    public const TYPE_PSP_DOCUMENT_REQUEST_CLOSED = 'psp.document_request.closed';
     public const TYPE_WEBHOOK_TEST = 'webhook.test';
 
     // Los nombres de la 1.1.0, con los valores nuevos: el código que compara $event->type con

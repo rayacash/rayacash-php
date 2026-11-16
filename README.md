@@ -1,6 +1,6 @@
 # rayacash-php
 
-El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos. Y si tu aplicación cobra a nombre de otras cuentas de Raya (un marketplace, una plataforma), conectarlas y crear pagos a su nombre con tu comisión, y enviarles pesos a tus vendedores desde tu saldo con payouts ([Raya Connect](#raya-connect)). También te deja verificar la identidad de tus clientes con su DNI, una prueba de vida y el Registro Nacional de las Personas ([Identidad](#identidad)).
+El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos. Y si tu aplicación cobra a nombre de otras cuentas de Raya (un marketplace, una plataforma), conectarlas y crear pagos a su nombre con tu comisión, y enviarles pesos a tus vendedores desde tu saldo con payouts ([Raya Connect](#raya-connect)). También te deja verificar la identidad de tus clientes con su DNI, una prueba de vida y el Registro Nacional de las Personas ([Identidad](#identidad)). Y darles a los clientes de tu empresa una cuenta con un CVU a su nombre y transferir en su nombre ([Raya PSP](#raya-psp)).
 
 ```php
 use RayaCash\RayaClient;
@@ -11,7 +11,7 @@ $payment = $client->payments->create(['amount' => 15000, 'description' => 'Pedid
 echo $payment->bank_transfer->cvu, ' ', $payment->checkout_url, "\n";
 ```
 
-Versión 1.2.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
+Versión 1.3.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
 
 ## Contenido
 
@@ -28,6 +28,7 @@ Versión 1.2.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 - [Webhooks](#webhooks)
 - [Raya Connect](#raya-connect)
 - [Identidad](#identidad)
+- [Raya PSP](#raya-psp)
 - [Sandbox](#sandbox)
 - [Tests de tu integración](#tests-de-tu-integración)
 - [Configuración avanzada](#configuración-avanzada)
@@ -44,6 +45,7 @@ Versión 1.2.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 5. **Para cobrar a nombre de otras cuentas:** una aplicación en [Developers › Integraciones › Apps](https://raya.cash/dashboard/developers/apps), con su `client_id`, su `client_secret` (`raya_cs_live_…`, que ves una sola vez) y tus URLs de redirección. Ver [Raya Connect](#raya-connect).
 6. **Para enviar payouts a tus vendedores:** el descriptor del comercio configurado en [Configuración › Negocio](https://raya.cash/dashboard/settings/business). Sin eso, crear un payout da `PAYOUT_ORIGIN_UNAVAILABLE`. Ver [Payouts](#payouts).
 7. **Para verificar la identidad de tus clientes:** Identidad activada en tu cuenta (la pedís desde [Identidad](https://raya.cash/dashboard/identity), en el dashboard: nos contás para qué la vas a usar y revisamos tu solicitud; hasta que la aprobemos, crear una verificación da `IDENTITY_NOT_ACTIVATED`) y, para el resultado, un destino de webhooks con los eventos de «Identidad». Identidad todavía no está disponible en el [sandbox](#sandbox): con una clave de prueba (`raya_sk_test_…`) responde 403 `SANDBOX_NOT_SUPPORTED`. Ver [Identidad](#identidad).
+8. **Para darles a tus clientes una cuenta con un CVU a su nombre:** una cuenta de empresa con Raya PSP activado (lo pedís desde [Raya PSP](https://raya.cash/dashboard/psp/customers), en el dashboard; hasta que lo aprobemos, crear un cliente da `PSP_NOT_ACTIVATED`) y, para enterarte de lo que reciben, un destino de webhooks con los eventos de «Raya PSP». Ver [Raya PSP](#raya-psp).
 
 ## Instalación
 
@@ -112,7 +114,7 @@ foreach ($page->autoPagingIter() as $deposit) {
 
 Cada método recibe los parámetros en un array, con los nombres de la API (`external_reference`, `created_gte`), y las opciones de la llamada, como la `idempotency_key`, en otro array: el último argumento. Un parámetro o una opción que no existe falla antes de mandar nada (con «¿quisiste decir…?» si escribiste `externalReference`).
 
-Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject`; en Raya Connect, `OAuthToken`, `User`, `ConnectOrder` y `ConnectPayout`, y en Identidad, `IdentityVerification` e `IdentityVerificationFiles`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
+Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject`; en Raya Connect, `OAuthToken`, `User`, `ConnectOrder` y `ConnectPayout`, en Identidad, `IdentityVerification` e `IdentityVerificationFiles`, y en Raya PSP, `PspCustomer`, `PspCustomerBalance`, `PspTransfer` y `PspBalance`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
 
 Cada objeto trae `getLastResponse()`, con el `requestId` (`req_…`) que nos tenés que mandar si escribís a soporte:
 
@@ -143,7 +145,7 @@ $transfer = Transfer::create(
 $page = Transfer::list(['direction' => 'inbound']);
 ```
 
-También están `OAuth::token()`, `User::retrieve()`, `ConnectOrder::create()`, `ConnectOrder::retrieve()` y `ConnectOrder::refundById()` (ver [Raya Connect](#raya-connect)): con la clave global puesta en el `access_token` de la cuenta conectada. Los payouts (`ConnectPayout::create()`, `ConnectPayout::retrieve()` y `ConnectPayout::list()`) van con tu clave secreta, como las transferencias, y las verificaciones de identidad también: `IdentityVerification::create()`, `retrieve()`, `list()`, `cancelById()` y `files()`, y `$verification->cancel()` (ver [Identidad](#identidad)). En un [sandbox](#sandbox), con su clave secreta de prueba como clave global, también `Payment::simulateTransfer()`. Como la configuración global dura todo el proceso, para operar con varias cuentas conectadas usá un `RayaClient` por cuenta.
+También están `OAuth::token()`, `User::retrieve()`, `ConnectOrder::create()`, `ConnectOrder::retrieve()` y `ConnectOrder::refundById()` (ver [Raya Connect](#raya-connect)): con la clave global puesta en el `access_token` de la cuenta conectada. Los payouts (`ConnectPayout::create()`, `ConnectPayout::retrieve()` y `ConnectPayout::list()`) van con tu clave secreta, como las transferencias, y las verificaciones de identidad también: `IdentityVerification::create()`, `retrieve()`, `list()`, `cancelById()` y `files()`, y `$verification->cancel()` (ver [Identidad](#identidad)), y Raya PSP: `PspCustomer::create()`, `retrieve()`, `list()`, `retrieveBalance()`, `blockById()`, `unblockById()`, `closeById()` y `recreateById()`, `$pspCustomer->block()`, `unblock()`, `close()` y `recreate()`, `PspTransfer::create()`, `retrieve()` y `list()`, y `PspBalance::retrieve()` (ver [Raya PSP](#raya-psp)). En un [sandbox](#sandbox), con su clave secreta de prueba como clave global, también `Payment::simulateTransfer()`. Como la configuración global dura todo el proceso, para operar con varias cuentas conectadas usá un `RayaClient` por cuenta.
 
 Los dos estilos usan el mismo núcleo y se comportan igual. La configuración global se lee en cada request, así que cambiarla entre llamadas surte efecto enseguida. Cada valor se valida al asignarlo, salvo la clave, que se valida en cada request: así un `.env` vacío no rompe el arranque de tu framework. Preferí `RayaClient` si tu proceso usa más de una clave o si querés configurar cada cliente por separado. `$payment->refund()` usa el cliente del que vino el pago: si lo trajiste con un `RayaClient`, usa ese cliente; si no, la configuración global. PHP no deja tener un `refund()` estático y otro de instancia, por eso el reembolso por id del estilo global es `Payment::refundById()`.
 
@@ -360,12 +362,12 @@ Todas las excepciones del SDK extienden `RayaCash\Exception\RayaException` (que 
 | Clase | HTTP | Códigos | Qué hacer |
 |---|---|---|---|
 | `InvalidRequestException` | 400, 405, 413 y los demás `4xx` | `PARAMETER_MISSING`, `PARAMETER_INVALID`, `PARAMETER_UNKNOWN`, `INVALID_JSON`, `OAUTH_GRANT_INVALID`, `OAUTH_GRANT_TYPE_UNSUPPORTED`… | Corregí la request: `$e->getParam()` dice qué parámetro falló. Con `OAUTH_GRANT_INVALID`, el code ya se usó o venció: la cuenta tiene que volver a autorizar. |
-| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `USER_NOT_FOUND`, `ORDER_NOT_FOUND`, `PAYOUT_NOT_FOUND`, `VERIFICATION_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta (o de la cuenta conectada). |
+| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `USER_NOT_FOUND`, `ORDER_NOT_FOUND`, `PAYOUT_NOT_FOUND`, `VERIFICATION_NOT_FOUND`, `CUSTOMER_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta (o de la cuenta conectada). |
 | `AuthenticationException` | 401 | `API_KEY_MISSING`, `API_KEY_INVALID`, `API_KEY_EXPIRED`, `ACCESS_TOKEN_MISSING`, `ACCESS_TOKEN_INVALID`, `ACCESS_TOKEN_REVOKED`, `OAUTH_CLIENT_INVALID`… | Revisá la clave secreta (o el access_token: con `ACCESS_TOKEN_REVOKED`, la cuenta desconectó tu app). |
-| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED`, `CONNECTED_ACCOUNT_LOCKED`, `CONNECTED_ACCOUNT_NOT_CONFIGURED`, `APP_DISABLED`, `PAYOUT_ORIGIN_UNAVAILABLE`, `SANDBOX_NOT_SUPPORTED`, `SANDBOX_ONLY`, `IDENTITY_NOT_ACTIVATED` | La cuenta (o la cuenta conectada, o tu app) no puede hacer esto todavía. `SANDBOX_NOT_SUPPORTED`: ese endpoint todavía no está disponible en el sandbox (usaste una credencial de prueba), como los de Identidad. `SANDBOX_ONLY`: `testHelpers` solo funciona en un [sandbox](#sandbox), con su clave secreta de prueba. `IDENTITY_NOT_ACTIVATED`: activá Identidad desde el dashboard antes de crear verificaciones. Si no la aprobamos, escribinos a soporte@raya.cash. |
+| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED`, `CONNECTED_ACCOUNT_LOCKED`, `CONNECTED_ACCOUNT_NOT_CONFIGURED`, `APP_DISABLED`, `PAYOUT_ORIGIN_UNAVAILABLE`, `SANDBOX_NOT_SUPPORTED`, `SANDBOX_ONLY`, `IDENTITY_NOT_ACTIVATED`, `PSP_NOT_ACTIVATED` | La cuenta (o la cuenta conectada, o tu app) no puede hacer esto todavía. `SANDBOX_NOT_SUPPORTED`: ese endpoint todavía no está disponible en el sandbox (usaste una credencial de prueba), como los de Identidad. `SANDBOX_ONLY`: `testHelpers` solo funciona en un [sandbox](#sandbox), con su clave secreta de prueba. `IDENTITY_NOT_ACTIVATED`: activá Identidad desde el dashboard antes de crear verificaciones. `PSP_NOT_ACTIVATED`: tu cuenta todavía no tiene [Raya PSP](#raya-psp) activado. Si no los aprobamos, escribinos a soporte@raya.cash. |
 | `IdempotencyException` (subclase de la siguiente: atrapala antes) | 409 | `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_USE` | Una clave por operación; si está en uso, reintentá más tarde con la misma. |
-| `ConflictException` | 409 | `PAYMENT_NOT_REFUNDABLE`, `PAYMENT_NOT_PENDING`, `VERIFICATION_NOT_CANCELABLE` | Mirá `$e->getData()['status']` (el estado del pago o de la verificación) y, en un reembolso, `$e->getData()['reason'] ?? null`. `PAYMENT_NOT_PENDING`: en un sandbox, ese pago ya no se puede simular. |
-| `UnprocessableEntityException` | 422 | `INSUFFICIENT_BALANCE`, `LIMIT_EXCEEDED`, `DESTINATION_NOT_FOUND`, `DESTINATION_INACTIVE`, `DESTINATION_NOT_SUPPORTED`, `REFUND_FAILED` | No se arregla reintentando: mostráselo a la persona. |
+| `ConflictException` | 409 | `PAYMENT_NOT_REFUNDABLE`, `PAYMENT_NOT_PENDING`, `VERIFICATION_NOT_CANCELABLE`, `CUSTOMER_ALREADY_EXISTS`, `CUSTOMER_STATUS_CONFLICT` | Mirá `$e->getData()['status']` (el estado del pago, de la verificación o del cliente) y, en un reembolso, `$e->getData()['reason'] ?? null`. `PAYMENT_NOT_PENDING`: en un sandbox, ese pago ya no se puede simular. `CUSTOMER_ALREADY_EXISTS`: ya tenés ese cliente de Raya PSP, con ese CUIL o CUIT o con esa verificación de Identidad (su `id`, en `$e->getData()['customer']`). `CUSTOMER_STATUS_CONFLICT`: el estado del cliente no permite la operación (quién lo bloqueó, en `$e->getData()['blocked_by']`). |
+| `UnprocessableEntityException` | 422 | `INSUFFICIENT_BALANCE`, `LIMIT_EXCEEDED`, `DESTINATION_NOT_FOUND`, `DESTINATION_INACTIVE`, `DESTINATION_NOT_SUPPORTED`, `REFUND_FAILED`, `CUSTOMER_INSUFFICIENT_BALANCE`, `CUSTOMER_DATA_MISMATCH`, `TAX_ID_NOT_REGISTERED` | No se arregla reintentando: mostráselo a la persona. En Raya PSP, `CUSTOMER_DATA_MISMATCH` es la razón social de una persona jurídica que no coincide con la del Registro Nacional de Sociedades (`name`, en `$e->getData()['field']`). |
 | `RateLimitException` | 429 | `RATE_LIMITED` | Esperá `$e->getRetryAfter()` segundos. En Identidad, si llegaste a un tope de tu cuenta, `$e->getData()['limit']` es `open` o `daily`. |
 | `ApiException` | 5xx y 408 | `INTERNAL_ERROR`, `BANK_UNAVAILABLE`, `CVU_UNAVAILABLE`, `API_UNAVAILABLE`, `TEMPORARILY_UNAVAILABLE` | Reintentá más tarde, en los POST con la misma `idempotency_key`. |
 | `ApiConnectionException` | — | `NETWORK_ERROR`, `TIMEOUT` | No llegó respuesta: reintentá con la misma `idempotency_key`. |
@@ -438,9 +440,10 @@ http_response_code(200);
 - **En Laravel, la ruta va sin CSRF** (la llama Raya, no un navegador: la firma reemplaza al token). En Laravel 11 o más nuevo, con `$middleware->validateCsrfTokens(except: ['webhooks/raya'])` en `bootstrap/app.php`; en Laravel 10, en el `$except` de `VerifyCsrfToken`.
 - Respondé `2xx` en menos de 15 segundos. Si tenés que hacer algo lento, guardá el evento, respondé y procesalo después.
 - El mismo evento puede llegar más de una vez y desordenado: guardá los `$event->id` que procesaste y, si necesitás el estado actual, consultá el objeto con la API.
-- `$event->data->object` es el `Transfer`, el `Payment`, el `ConnectOrder` o la `IdentityVerification` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
+- `$event->data->object` es el `Transfer`, el `Payment`, el `ConnectOrder`, la `IdentityVerification`, el `PspCustomer`, la `PspTransfer` o el `PspDocumentRequest` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
 - Si tu aplicación cobra a nombre de otras cuentas, recibís `connect.order.created`, `connect.order.succeeded`, `connect.order.failed` y `connect.order.refunded` (`Event::TYPE_CONNECT_ORDER_*`), con el `ConnectOrder`; la cuenta conectada recibe sus `payment.*`. Ver [Raya Connect](#raya-connect).
 - Si verificás la identidad de tus clientes, recibís `identity.verification.verified`, `identity.verification.declined`, `identity.verification.expired` e `identity.verification.canceled` (`Event::TYPE_IDENTITY_VERIFICATION_*`), con la `IdentityVerification`, siempre con `person` en `null`. Ver [Identidad](#identidad).
+- Si tu empresa tiene Raya PSP, recibís los eventos de tus clientes (`Event::TYPE_PSP_*`): `psp.customer.activated`, `psp.customer.updated`, `psp.customer.failed`, `psp.customer.rejected`, `psp.customer.blocked`, `psp.customer.unblocked` y `psp.customer.closed`, con el `PspCustomer`; `psp.transfer.received`, `psp.transfer.sent` y `psp.transfer.failed`, con la `PspTransfer`, y `psp.document_request.created` y `psp.document_request.closed`, con el `PspDocumentRequest`. Ver [Raya PSP](#raya-psp).
 - «Enviar evento de prueba» (en Developers › Webhooks) manda un `webhook.test`: respondé `2xx` e ignoralo.
 - `$event->livemode` es `true` en tu cuenta real y `false` en un [sandbox](#sandbox). Un evento creado antes de que la API sumara el campo no lo trae si se reenvía: leelo con `$event->livemode ?? true`.
 - La firma tolera 5 minutos de diferencia con tu reloj (`$tolerance = 300`, en segundos; `null` o `0` la desactivan). Mientras rotás el secreto llegan dos firmas: alcanza con que coincida una.
@@ -740,6 +743,146 @@ document.querySelector("#verificar").addEventListener("click", async () => {
 
 La referencia completa de Identidad, con Identity.js, está en https://raya.cash/api/identity.
 
+## Raya PSP
+
+Con [Raya PSP](https://raya.cash/api/psp) les das a los clientes de tu empresa una cuenta con un CVU a su nombre: reciben transferencias en su CVU y vos transferís en su nombre. Es solo para cuentas de empresa con Raya PSP activado: lo pedís desde [Raya PSP](https://raya.cash/dashboard/psp/customers), en el dashboard, y hasta que lo aprobemos, crear un cliente, transferir en su nombre y las demás acciones (salvo bloquear) dan `PermissionDeniedException` con `getErrorCode() === 'PSP_NOT_ACTIVATED'`. Todo va con tu clave secreta, desde tu servidor. Raya PSP todavía no está disponible en el [sandbox](#sandbox): con una clave de prueba (`raya_sk_test_…`) responde 403 `SANDBOX_NOT_SUPPORTED`. El flujo:
+
+1. **Creás el cliente** con `$client->psp->customers->create()`: si se verificó con Raya Identity, con el `id` de su verificación; si no, con su CUIL o CUIT, su nombre y, si es una persona humana, las fotos de su DNI y de una selfie.
+2. **Te avisamos cuando tiene su CVU** con el webhook `psp.customer.activated` (si no quedó `active` en el momento), y lo leés con `$client->psp->customers->retrieve()`.
+3. **Transferís en su nombre** con `$client->psp->transfers->create()`, y lo que recibe en su CVU te llega como `psp.transfer.received`.
+4. **Lo administrás:** `$client->psp->customers->block()` (sigue recibiendo, pero no puede enviar), `close()` (le das de baja el CVU) y `recreate()` (le das uno nuevo), y recorrés tus clientes con `$client->psp->customers->list()`.
+
+**Tu saldo manda.** Lo que reciben tus clientes se acredita en tu cuenta y suma a tu saldo; cada cliente tiene además su saldo (`balance`), que sube con lo que recibe y baja con lo que transferís en su nombre. Para transferir en nombre de un cliente tienen que alcanzar los dos: primero tu saldo disponible (si no, `INSUFFICIENT_BALANCE`, aunque el cliente tenga saldo) y después el del cliente (si no, `CUSTOMER_INSUFFICIENT_BALANCE`). El saldo de un cliente nunca queda negativo, y el de un cliente no sirve para transferir en nombre de otro. Cada acreditación a un CVU de un cliente y cada transferencia en su nombre tienen una comisión que se descuenta de tu saldo (el `fee` de la `PspTransfer`): el saldo del cliente se mueve por el monto entero (`amount`), y entre dos clientes de tu cuenta no hay comisión. Los movimientos de tus clientes no aparecen en `$client->transfers` ni emiten `transfer.*`.
+
+```php
+use RayaCash\PspCustomer;
+use RayaCash\RayaClient;
+
+$client = new RayaClient(); // lee RAYA_SECRET_KEY
+
+// 1. Creá el cliente con su verificación de Identidad (verified): su CUIL, su nombre y su
+// sexo salen de ahí, así que no los mandás.
+$pspCustomer = $client->psp->customers->create(
+    [
+        'identity_verification' => 'idv_3kT9vQ2mXw7Lp0aBcD4eF6gH',
+        'external_reference' => 'cliente-8812', // tu id del cliente, sin datos personales
+        'metadata' => ['plan' => 'pro'],
+    ],
+    ['idempotency_key' => $customer->psp_idempotency_key], // un UUID v4 guardado antes
+);
+if ($pspCustomer->status === PspCustomer::STATUS_ACTIVE) {
+    echo $pspCustomer->cvu?->account, ' ', $pspCustomer->cvu?->alias, "\n"; // su CVU y su alias
+} // si no, verifying o pending: te avisamos con psp.customer.activated
+
+// 2. Su saldo, y lo que podés transferir ahora en su nombre (hasta tu saldo disponible).
+$customerBalance = $client->psp->customers->retrieveBalance($pspCustomer->id);
+echo $customerBalance->available, ' ', $customerBalance->transferable, "\n";
+
+// 3. Transferí en su nombre, a un CBU, CVU o alias. La idempotency_key es obligatoria.
+$pspTransfer = $client->psp->transfers->create(
+    [
+        'customer' => $pspCustomer->id,
+        'amount' => '18350.50',
+        'destination' => '0000123380736153041182',
+    ],
+    ['idempotency_key' => $withdrawal->idempotency_key], // guardala ANTES de llamar
+);
+echo $pspTransfer->status, ' ', $pspTransfer->counterparty->name, "\n"; // pending o completed
+```
+
+```php
+// 4. Bloquealo (sigue recibiendo, pero no puede enviar) y levantá tu bloqueo.
+$pspCustomer = $client->psp->customers->block($pspCustomer->id);
+$pspCustomer = $client->psp->customers->unblock($pspCustomer->id);
+
+// 5. Dale de baja el CVU (conserva su saldo y su historial) y, si hace falta, uno nuevo.
+$pspCustomer = $client->psp->customers->close($pspCustomer->id);
+$pspCustomer = $client->psp->customers->recreate($pspCustomer->id); // active, failed o pending
+
+// 6. Tus clientes y lo que recibió uno, de lo más nuevo a lo más viejo.
+$page = $client->psp->customers->list(['status' => 'active', 'limit' => 100]);
+foreach ($page->autoPagingIter() as $pspCustomer) {
+    echo $pspCustomer->id, ' ', $pspCustomer->balance, "\n";
+}
+$page = $client->psp->transfers->list(['customer' => $pspCustomer->id, 'direction' => 'inbound']);
+foreach ($page->autoPagingIter() as $pspTransfer) {
+    echo $pspTransfer->id, ' ', $pspTransfer->amount, ' ', $pspTransfer->counterparty->name, "\n";
+}
+
+// 7. Tu saldo y la suma de los saldos de tus clientes.
+$pspBalance = $client->psp->balance->retrieve();
+echo $pspBalance->available, ' ', $pspBalance->customers_balance, "\n";
+```
+
+| Método | Request | Devuelve |
+|---|---|---|
+| `$client->psp->customers->create([…], ['idempotency_key' => …])` | `POST /v1/psp/customers` | `PspCustomer`: `active` o `failed` (HTTP 201), `verifying` o `pending` (HTTP 202) |
+| `$client->psp->customers->retrieve($customerId)` | `GET /v1/psp/customers/:id` | `PspCustomer` |
+| `$client->psp->customers->list([…])` | `GET /v1/psp/customers` | `ListObject` de `PspCustomer` |
+| `$client->psp->customers->retrieveBalance($customerId)` | `GET /v1/psp/customers/:id/balance` | `PspCustomerBalance` |
+| `$client->psp->customers->block($customerId)` | `POST /v1/psp/customers/:id/block` | `PspCustomer`, `blocked` |
+| `$client->psp->customers->unblock($customerId)` | `POST /v1/psp/customers/:id/unblock` | `PspCustomer` |
+| `$client->psp->customers->close($customerId)` | `POST /v1/psp/customers/:id/close` | `PspCustomer`, `closed` |
+| `$client->psp->customers->recreate($customerId)` | `POST /v1/psp/customers/:id/recreate` | `PspCustomer`: `active` o `failed` (HTTP 200), `pending` (HTTP 202) |
+| `$client->psp->transfers->create([…], ['idempotency_key' => …])` | `POST /v1/psp/transfers` | `PspTransfer`, `pending` o `completed` |
+| `$client->psp->transfers->retrieve($transferId)` | `GET /v1/psp/transfers/:id` | `PspTransfer` |
+| `$client->psp->transfers->list([…])` | `GET /v1/psp/transfers` | `ListObject` de `PspTransfer` |
+| `$client->psp->balance->retrieve()` | `GET /v1/psp/balance` | `PspBalance` |
+
+**Crear un cliente** tiene tres formas, según cómo verificaste su identidad, y no se mezclan: si junto con `identity_verification` mandás `tax_id`, `name`, `person_type` o las fotos, `PARAMETER_INVALID`. En las tres podés sumar `external_reference` y `metadata`.
+
+| Tu cliente | `create` recibe |
+|---|---|
+| Se verificó con Raya Identity | Solo `identity_verification` |
+| Es una persona humana y lo verificaste vos (tu propio KYC o el de otro proveedor) | `tax_id`, `name`, `person_type` `F`, `document_front_url`, `document_back_url` y `selfie_url` |
+| Es una persona jurídica | `tax_id`, `name` y `person_type` `J` |
+
+- **Con Raya Identity**, verificalo antes con `$client->identity->verifications->create()` (ver [Identidad](#identidad)) y mandá solo su `id`, en `identity_verification`: una verificación `document` de tu cuenta, `verified`, que no usaste para otro cliente (si ya la usaste, `CUSTOMER_ALREADY_EXISTS`). Su CUIL (`tax_id`), su nombre y apellido (`name`, como figuran en el RENAPER), su sexo y su nacionalidad salen de la verificación, y es una persona humana (`F`). En general, `create` responde `201` con el cliente `active`, con su CVU y su alias. Si la verificación no tiene un CUIL válido, `PARAMETER_INVALID` con `identity_verification` en `$e->getParam()`: a ese cliente lo creás con sus datos y las fotos. Y la persona titular de tu cuenta no puede ser tu cliente (también `PARAMETER_INVALID`).
+- **Con las fotos**, una persona humana que verificaste vos: `tax_id`, `name`, `person_type` `F` y las URLs `https://` del frente y del dorso de su DNI y de una selfie (`document_front_url`, `document_back_url` y `selfie_url`: JPEG o PNG, derechas y de hasta 5 MB), que bajamos y validamos contra el Registro Nacional de las Personas (RENAPER). Su sexo lo leemos del frente del DNI. `create` responde `202` con el cliente `verifying` y te avisamos el resultado con `psp.customer.activated` o `psp.customer.rejected` (el motivo, en `decline_reason->code`: por ejemplo, `document_mismatch` si el DNI no es el de `tax_id`, o `name_mismatch` si el nombre no es el del RENAPER).
+- **Una persona jurídica** no lleva fotos: validamos su CUIT y su razón social contra el Registro Nacional de Sociedades (si no figura, `TAX_ID_NOT_REGISTERED`; si la razón social no coincide, `CUSTOMER_DATA_MISMATCH`, con `name` en `$e->getData()['field']`) y la revisamos antes de crear su CVU, así que responde `202`, `verifying`.
+- **`create` recibe**, en este orden, `identity_verification`, `tax_id` (el CUIL o CUIT: 11 dígitos sin guiones, siempre como string), `name` (su nombre y apellido o la razón social), `person_type` (`F` o `J`), las fotos, `external_reference` (tu identificador, hasta 128 caracteres en una línea: no pongas datos personales, que al filtrar la lista viaja en la URL) y `metadata` (hasta 20 pares de texto). Responde `201` con el cliente `active` (con su CVU y su alias) o `failed`, o `202` con `verifying` o `pending`, y ahí te avisamos con `psp.customer.activated`, `psp.customer.failed` o `psp.customer.rejected`. La `idempotency_key` es opcional pero recomendada. Si ya tenés un cliente con ese CUIL o CUIT, o con esa verificación, `CUSTOMER_ALREADY_EXISTS`, con su `id` en `$e->getData()['customer']`. Antes de mandar nada fallan un parámetro que no es de la API, una `identity_verification` que no es un string y, sin ella, un `tax_id` o un `name` que no son strings; las formas y los formatos los valida la API (`PARAMETER_MISSING` o `PARAMETER_INVALID`, con el campo en `$e->getParam()`). Con PHPStan, el tipo de `$params` ya es una de las tres formas (ver [Versionado y compatibilidad](#versionado-y-compatibilidad)).
+- **Los estados** (`PspCustomer::STATUS_*`): `verifying` (validamos su identidad o lo estamos revisando), `pending` (estamos creando su CVU o asignándole el alias), `active`, `blocked` (sigue recibiendo, pero no puede enviar ni recrear su CVU; `blocked_by` dice quién lo bloqueó: `account`, vos, o `raya`), `closed` (su CVU está dado de baja; conserva su saldo y su historial), `failed` (no pudimos crear su CVU) y `rejected` (no pudimos validarlo o aprobarlo: no cambia más y libera el CUIL o CUIT). Pueden sumarse valores.
+- **Las acciones** van sin body, con una `idempotency_key` opcional, y devuelven el cliente actualizado: `block()` se puede desde `pending`, `active`, `closed` o `failed`, y es la única que no exige Raya PSP activado; `unblock()` levanta tu bloqueo (uno de Raya solo lo levantamos nosotros); `close()`, solo desde `active` (también con saldo, y levanta tu bloqueo), y `recreate()`, desde `closed` o `failed` y sin bloqueos: conserva su `id`, su saldo y su historial, y responde `200` con `active` o `failed`, o `202` con `pending`. Repetir una acción que ya se hizo devuelve el cliente igual. Si su estado no la permite, `ConflictException` con `getErrorCode() === 'CUSTOMER_STATUS_CONFLICT'` y su `status` y su `blocked_by` en `$e->getData()`. Desde un cliente que ya tenés: `$pspCustomer->block()`, `unblock()`, `close()` y `recreate()`.
+- **`transfers->create` recibe** `customer` (el `id` del cliente), `amount` (lo que baja su saldo, en pesos, como en [Montos](#montos)) y `destination` (un CBU o CVU de 22 dígitos o un alias, siempre como string), y la `idempotency_key` es obligatoria, como en las transferencias. El cliente tiene que estar `active` (si no, `CUSTOMER_STATUS_CONFLICT`). Buscamos al titular del destino y te lo devolvemos en `counterparty`: si es una cuenta de Raya, vuelve `completed`; si no, `pending` hasta que te avisamos con `psp.transfer.sent` o `psp.transfer.failed`. Si falla o la entidad de destino la revierte, te devolvemos `amount` al saldo del cliente y al tuyo.
+- **Las listas:** `customers->list()` acepta `status`, `external_reference` (coincidencia exacta), `created_gte`, `created_lt` y `limit` (no se filtra por CUIL o CUIT: sería un dato personal en la URL); `transfers->list()`, `customer`, `direction` (`inbound` u `outbound`), `status`, `created_gte`, `created_lt` y `limit`. Se recorren con `autoPagingIter()`, como la de transferencias ([Paginación](#paginación)).
+- **Los errores nuevos**, con la clase de su status (ver [Errores](#errores)): `PSP_NOT_ACTIVATED` (403), `CUSTOMER_NOT_FOUND` (404: no existe o no es tuyo, también con un id que no es `pspc_…`; en `transfers->create`, con `customer` en `$e->getData()['field']`), `CUSTOMER_ALREADY_EXISTS` y `CUSTOMER_STATUS_CONFLICT` (409), y `CUSTOMER_INSUFFICIENT_BALANCE`, `CUSTOMER_DATA_MISMATCH` y `TAX_ID_NOT_REGISTERED` (422). `transferable` no tiene en cuenta el límite mensual del cliente: una transferencia a una cuenta fuera de Raya que lo supera responde `LIMIT_EXCEEDED` (422), sin descontar nada (si subís su límite desde el panel, podés reintentar con la misma `idempotency_key`).
+- **Estilo global:** con `RayaCash::setApiKey($secretKey)`, `PspCustomer::create([…])`, `retrieve($id)`, `list([…])`, `retrieveBalance($id)`, `blockById($id)`, `unblockById($id)`, `closeById($id)` y `recreateById($id)` (PHP no deja tener un `block()` estático y otro de instancia), `PspTransfer::create([…], ['idempotency_key' => …])`, `retrieve($id)` y `list([…])`, y `PspBalance::retrieve()`. Hay un ejemplo en [`examples/operar-clientes-psp.php`](examples/operar-clientes-psp.php).
+
+**Los webhooks** te avisan lo que pasa con tus clientes. Verificá la firma como en [Webhooks](#webhooks): `$event->data->object` es el `PspCustomer`, la `PspTransfer` o el `PspDocumentRequest` tal como estaba. Los elegís en [Developers › Webhooks](https://raya.cash/dashboard/developers/webhooks), en el grupo «Raya PSP», que aparece cuando tu cuenta tiene Raya PSP aprobado.
+
+| Evento | Cuándo |
+|---|---|
+| `psp.customer.activated` (`Event::TYPE_PSP_CUSTOMER_ACTIVATED`) | Su CVU quedó activo: ya puede recibir transferencias. Puede llegar con `status` en `blocked`. |
+| `psp.customer.updated` (`Event::TYPE_PSP_CUSTOMER_UPDATED`) | Le asignamos el alias a su CVU después de activarlo. |
+| `psp.customer.failed` (`Event::TYPE_PSP_CUSTOMER_FAILED`) | No pudimos crear su CVU: podés volver a intentarlo con `recreate()`. |
+| `psp.customer.rejected` (`Event::TYPE_PSP_CUSTOMER_REJECTED`) | No pudimos validarlo o aprobarlo: mirá `decline_reason->code`. |
+| `psp.customer.blocked` (`Event::TYPE_PSP_CUSTOMER_BLOCKED`) | Quedó bloqueado o cambió quién lo bloqueó: sigue recibiendo, pero no puede enviar. |
+| `psp.customer.unblocked` (`Event::TYPE_PSP_CUSTOMER_UNBLOCKED`) | Se levantaron sus bloqueos. |
+| `psp.customer.closed` (`Event::TYPE_PSP_CUSTOMER_CLOSED`) | Se dio de baja su CVU (por vos o por Raya): su saldo y su historial se conservan. |
+| `psp.transfer.received` (`Event::TYPE_PSP_TRANSFER_RECEIVED`) | Entró una transferencia a su CVU. |
+| `psp.transfer.sent` (`Event::TYPE_PSP_TRANSFER_SENT`) | Se completó una transferencia que enviaste en su nombre. |
+| `psp.transfer.failed` (`Event::TYPE_PSP_TRANSFER_FAILED`) | Una transferencia que enviaste en su nombre no se pudo completar o el banco la revirtió. |
+| `psp.document_request.created` (`Event::TYPE_PSP_DOCUMENT_REQUEST_CREATED`) | Te pedimos documentación sobre un cliente: subila desde Negocios › Raya PSP. |
+| `psp.document_request.closed` (`Event::TYPE_PSP_DOCUMENT_REQUEST_CLOSED`) | Cerramos un pedido de documentación. |
+
+Un cliente bloqueado sigue recibiendo: te llega como `psp.transfer.received`, que puede llegar antes que `psp.customer.activated`.
+
+```php
+use RayaCash\Event;
+use RayaCash\PspCustomer;
+use RayaCash\PspTransfer;
+
+// $event, de Webhook::constructEvent(…), ya con la firma verificada.
+$object = $event->data->object ?? null;
+if ($event->type === Event::TYPE_PSP_CUSTOMER_ACTIVATED && $object instanceof PspCustomer) {
+    echo $object->id, ' ', $object->cvu?->account, "\n"; // ya puede recibir transferencias
+} elseif ($event->type === Event::TYPE_PSP_TRANSFER_RECEIVED && $object instanceof PspTransfer) {
+    echo $object->customer, ' recibió ', $object->amount, "\n"; // también si está bloqueado
+}
+```
+
+`$client->psp` existe desde la 1.3.0. La referencia completa de Raya PSP está en https://raya.cash/api/psp.
+
 ## Sandbox
 
 Un sandbox es una cuenta aparte de tu cuenta real, solo para probar: cobrás con la misma API y el mismo SDK, simulás la transferencia de quien paga y te llegan los webhooks, sin mover plata. Si en el menú de tu perfil del dashboard aparece «Crear sandbox» o «Sandboxes», tu cuenta lo tiene: creá uno desde ahí (hasta 5 por cuenta). Si no aparece, tu cuenta todavía no lo tiene.
@@ -781,7 +924,7 @@ $balance = $client->balance->retrieve(); // tu saldo de prueba: sube al simular
 - **El saldo y los reembolsos:** `$client->balance->retrieve()` da tu saldo de prueba, que sube al simular, en el acto, por lo recibido. `payments->refund()` devuelve todo al instante, sin pasar por el banco ni mirar el saldo, hasta 30 días después de `paid_at`, y te llega `payment.refunded`.
 - **Los webhooks:** cada sandbox tiene sus propios destinos (hasta 3, en Developers › Webhooks del sandbox), con 3 intentos por entrega, y solo emite `payment.*`, `connect.order.*` y el `webhook.test` de «Enviar evento de prueba». Sus eventos traen `$event->livemode` en `false`; los de tu cuenta real, en `true`. La firma se verifica igual, con el secreto (`whsec_…`) de ese destino. Creá el destino antes de simular: cada destino recibe solo los eventos que ocurren después de crearlo, así que los de un pago que simulaste antes no le llegan ni se pueden reenviar. Para probar en tu máquina sin publicar una URL, usá rayacash-cli (necesita Node.js 22 o más nuevo): copiá a `RAYA_WEBHOOK_SECRET` el secreto de tu máquina que muestra `npx rayacash-cli listen --print-secret` y abrí la escucha con `npx rayacash-cli listen --forward-to localhost:8000/webhooks/raya` (toma la clave secreta de prueba de la variable `RAYA_SECRET_KEY` de esa terminal, no de tu `.env`, o de `npx rayacash-cli login`): le reenvía a tu servidor los eventos del sandbox que ocurren con la escucha abierta, firmados con ese secreto.
 - **Los límites:** el sandbox tiene sus propios límites de requests y un tope diario de pagos de prueba. Pasados, la API responde 429 `RATE_LIMITED` con `Retry-After`, como en tu cuenta real.
-- **Lo que todavía no está disponible en el sandbox:** las transferencias (`transfers`), los payouts (`connect->payouts`) e Identidad: con una clave de prueba responden 403 `SANDBOX_NOT_SUPPORTED`. Raya.js todavía no acepta la clave pública de prueba.
+- **Lo que todavía no está disponible en el sandbox:** las transferencias (`transfers`), los payouts (`connect->payouts`), Identidad y Raya PSP (`psp`): con una clave de prueba responden 403 `SANDBOX_NOT_SUPPORTED`. Raya.js todavía no acepta la clave pública de prueba.
 - **Al pasar a tu cuenta real:** cambiá la clave por la real (`raya_sk_live_…`, que creás con verificación facial o desde tu teléfono), sacá `testHelpers`, configurá tu negocio en Configuración › Negocio y volvé a crear tus destinos de webhooks (en `RAYA_WEBHOOK_SECRET`, el secreto del destino de tu cuenta real) y tus apps: lo del sandbox no pasa a tu cuenta real. Ahí cada pago `pending` tiene su propio CVU y su alias, un pago de menos se devuelve solo (queda `refunded`), lo cobrado se suma a tu saldo cuando se liquida y un reembolso puede fallar por saldo (`INSUFFICIENT_BALANCE`).
 
 ### Raya Connect con usuarios de prueba
@@ -868,7 +1011,7 @@ $client = new RayaClient([
 ```
 
 - **Proxies y certificados:** pasá un `CurlClient` con opciones de curl (`CURLOPT_PROXY`, `CURLOPT_CAINFO`…). Las que maneja el SDK (URL, método, headers, body, timeouts y redirects) no se aceptan, y apagar la verificación TLS o `CURLOPT_VERBOSE` (escribe el header `Authorization`, con la clave entera) tampoco: para ver las requests, usá `RAYA_LOG=debug`, y para un problema de conexión, `curl -v https://api.raya.cash` en la terminal. Tus opciones pueden llevar la contraseña del proxy: no aparecen en `var_dump()` ni (desde PHP 8.2) en las trazas, y un `CurlClient` no se serializa. libcurl también respeta `https_proxy`. En Windows, si ves `curl 60` o `curl 77`, falta el certificado de CA: configurá `curl.cainfo` en tu `php.ini` o pasá `CURLOPT_CAINFO`. Para usar otra librería HTTP, implementá `HttpClientInterface`.
-- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.2.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
+- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.3.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
 - **Logging:** con `RAYA_LOG=info` (o `RayaCash::setLog('info')`) ves cada request, su status, su `request_id` y los reintentos en STDERR (en la consola) o en el `error_log()` de PHP (en FPM o Apache); con `debug`, también la query y la idempotency key. Con `RayaCash::setLogger($logger)`, un logger PSR-3 (Monolog, el de Laravel, el de Symfony) recibe cada línea, aunque no haya `RAYA_LOG`. Nunca logueamos la clave ni los bodies.
 - **Cerrar:** `$client->close()` suelta la conexión, para workers largos (Octane, un consumidor de colas). Se puede llamar más de una vez y el cliente sigue usable: la próxima request abre otra. El `http_client` que pasaste no se toca.
 - **Endpoints nuevos:** si la API suma un endpoint antes que el SDK, usá `$client->rawRequest('get', '/v1/…', params: […])` o `$client->rawRequest('post', '/v1/…', body: […])`: tiene la misma autenticación, reintentos y errores.
@@ -882,13 +1025,14 @@ $client = new RayaClient([
 - Si la clave se filtró, rotala en Developers › API Keys con vencimiento «Ahora»: la anterior deja de funcionar al instante.
 - **En una app:** el `client_secret` y los `access_token` de las cuentas conectadas son secretos como la clave: guardalos solo en tu servidor. Si el `client_secret` se filtró, regeneralo en Developers › Apps (el anterior deja de valer); si se filtró un `access_token`, la cuenta puede desconectar tu app desde Configuración › Apps externas o volver a autorizarla (el token anterior muere). El SDK enmascara los `access_token` como a la clave, pero el `client_secret` viaja en el body de `oauth->token`: con las trazas con argumentos (`zend.exception_ignore_args = Off`, el valor de desarrollo), la traza de un error de la API en esa llamada incluye la request con su body; con el valor de producción (`On`), no.
 - **En Identidad,** `person` y las imágenes son datos personales de quien se verifica: usalos solo para lo que esa persona aceptó, guardá lo mínimo y no los escribas en logs (`print_r($verification)` los muestra). Los eventos nunca traen `person`. En el navegador va Identity.js, que no usa ninguna clave: solo el `id` de la verificación, que conviene darle solo a la persona que se tiene que verificar.
+- **En Raya PSP,** el CUIL o CUIT, el nombre y las fotos del DNI y la selfie de tus clientes son datos personales: no los pongas en `external_reference` ni en `metadata` (`external_reference` viaja en la URL al filtrar la lista) y no los escribas en logs (`print_r($pspCustomer)` los muestra).
 - Las requests que hacés con la clave secreta quedan 30 días en [Developers › Logs](https://raya.cash/dashboard/developers/logs).
 
 ## Versionado y compatibilidad
 
 - [Semver](https://semver.org/lang/es/): los cambios incompatibles solo llegan en una versión mayor (`2.0.0`). Las menores (`1.1.0`) suman cosas sin romper nada y las de parche (`1.0.1`) corrigen errores. Todo queda anotado en el [CHANGELOG](CHANGELOG.md).
 - La API puede sumar campos, valores de enums, eventos, códigos de error y endpoints. El SDK los deja pasar: tu código tiene que ignorar lo que no conoce.
-- PHP 8.1 a 8.5. Cada objeto declara sus campos (`@property-read`) y cada método, la forma de sus arrays: tu IDE y PHPStan conocen los campos (los estados son uniones de literales, como `'pending'|'succeeded'|…`, y pueden sumarse valores) y PHPStan avisa si `transfers->create` va sin `idempotency_key`.
+- PHP 8.1 a 8.5. Cada objeto declara sus campos (`@property-read`) y cada método, la forma de sus arrays: tu IDE y PHPStan conocen los campos (los estados son uniones de literales, como `'pending'|'succeeded'|…`, y pueden sumarse valores) y PHPStan avisa si `transfers->create` o `psp->transfers->create` van sin `idempotency_key`, o si los parámetros de `psp->customers->create` no son una de sus tres formas: para tipar los tuyos, importá `PspCustomerCreateParams` de `RayaCash\Service\PspCustomerService` con `@phpstan-import-type`.
 
 ## Desarrollo
 

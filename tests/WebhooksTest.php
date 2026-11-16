@@ -11,6 +11,9 @@ use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\IdentityVerification;
 use RayaCash\Internal\Timing;
 use RayaCash\Payment;
+use RayaCash\PspCustomer;
+use RayaCash\PspDocumentRequest;
+use RayaCash\PspTransfer;
 use RayaCash\RayaClient;
 use RayaCash\RayaObject;
 use RayaCash\Tests\Support\Fixtures;
@@ -451,6 +454,77 @@ final class WebhooksTest extends TestCase
         $canceled = $event->data->object;
         self::assertInstanceOf(IdentityVerification::class, $canceled);
         self::assertSame(IdentityVerification::STATUS_CANCELED, $canceled->status);
+    }
+
+    /**
+     * Los psp.*: el PspCustomer, la PspTransfer o el PspDocumentRequest, cada uno con su clase, y
+     * los 12 tipos con su constante.
+     */
+    public function testConstructEventWithRayaPspObjects(): void
+    {
+        $cases = [
+            [Fixtures::EVENT_PSP_CUSTOMER_ACTIVATED, PspCustomer::class],
+            [Fixtures::EVENT_PSP_TRANSFER_RECEIVED, PspTransfer::class],
+            [Fixtures::EVENT_PSP_DOCUMENT_REQUEST_CREATED, PspDocumentRequest::class],
+        ];
+        foreach ($cases as [$values, $class]) {
+            $body = json_encode($values, JSON_THROW_ON_ERROR);
+            $event = Webhook::constructEvent(
+                $body,
+                WebhookSignature::generateHeader($body, self::SECRET),
+                self::SECRET,
+            );
+            self::assertSame([$values['id'], $values['type']], [$event->id, $event->type]);
+            self::assertSame($class, $event->data->object::class);
+        }
+
+        // Con $client->constructEvent(), ligado al cliente: el cliente del evento se bloquea con
+        // su clave.
+        $body = json_encode(Fixtures::EVENT_PSP_CUSTOMER_ACTIVATED, JSON_THROW_ON_ERROR);
+        $event = $this->api->client(Fixtures::OTHER_KEY)->constructEvent(
+            $body,
+            WebhookSignature::generateHeader($body, self::SECRET),
+            self::SECRET,
+        );
+        $pspCustomer = $event->data->object;
+        self::assertInstanceOf(PspCustomer::class, $pspCustomer);
+        $this->api->add(200, Fixtures::PSP_CUSTOMER_BLOCKED);
+        self::assertSame(PspCustomer::STATUS_BLOCKED, $pspCustomer->block()->status);
+        self::assertSame(
+            'Bearer ' . Fixtures::OTHER_KEY,
+            $this->api->last()->header('authorization'),
+        );
+
+        self::assertSame(
+            [
+                'psp.customer.activated',
+                'psp.customer.updated',
+                'psp.customer.failed',
+                'psp.customer.rejected',
+                'psp.customer.blocked',
+                'psp.customer.unblocked',
+                'psp.customer.closed',
+                'psp.transfer.received',
+                'psp.transfer.sent',
+                'psp.transfer.failed',
+                'psp.document_request.created',
+                'psp.document_request.closed',
+            ],
+            [
+                Event::TYPE_PSP_CUSTOMER_ACTIVATED,
+                Event::TYPE_PSP_CUSTOMER_UPDATED,
+                Event::TYPE_PSP_CUSTOMER_FAILED,
+                Event::TYPE_PSP_CUSTOMER_REJECTED,
+                Event::TYPE_PSP_CUSTOMER_BLOCKED,
+                Event::TYPE_PSP_CUSTOMER_UNBLOCKED,
+                Event::TYPE_PSP_CUSTOMER_CLOSED,
+                Event::TYPE_PSP_TRANSFER_RECEIVED,
+                Event::TYPE_PSP_TRANSFER_SENT,
+                Event::TYPE_PSP_TRANSFER_FAILED,
+                Event::TYPE_PSP_DOCUMENT_REQUEST_CREATED,
+                Event::TYPE_PSP_DOCUMENT_REQUEST_CLOSED,
+            ],
+        );
     }
 
     public function testConstructEventTestAndUnknownTypes(): void

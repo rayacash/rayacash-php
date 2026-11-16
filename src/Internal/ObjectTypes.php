@@ -13,6 +13,11 @@ use RayaCash\IdentityVerificationFiles;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
+use RayaCash\PspBalance;
+use RayaCash\PspCustomer;
+use RayaCash\PspCustomerBalance;
+use RayaCash\PspDocumentRequest;
+use RayaCash\PspTransfer;
 use RayaCash\RayaObject;
 use RayaCash\Transfer;
 use RayaCash\User;
@@ -37,6 +42,11 @@ final class ObjectTypes
         'list' => ListObject::class,
         'oauth_token' => OAuthToken::class,
         'payment' => Payment::class,
+        'psp.balance' => PspBalance::class,
+        'psp.customer' => PspCustomer::class,
+        'psp.customer_balance' => PspCustomerBalance::class,
+        'psp.document_request' => PspDocumentRequest::class,
+        'psp.transfer' => PspTransfer::class,
         'transfer' => Transfer::class,
         'user' => User::class,
     ];
@@ -51,6 +61,11 @@ final class ObjectTypes
         ListObject::class => 'una lista',
         OAuthToken::class => 'un access_token',
         Payment::class => 'un pago',
+        PspBalance::class => 'el saldo de Raya PSP',
+        PspCustomer::class => 'un cliente de Raya PSP',
+        PspCustomerBalance::class => 'el saldo de un cliente',
+        PspDocumentRequest::class => 'un pedido de documentación',
+        PspTransfer::class => 'una transferencia de un cliente',
         Transfer::class => 'una transferencia',
         User::class => 'un usuario',
     ];
