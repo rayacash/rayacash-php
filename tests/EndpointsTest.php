@@ -12,6 +12,7 @@ use RayaCash\Exception\ApiConnectionException;
 use RayaCash\Exception\ApiException;
 use RayaCash\Exception\AuthenticationException;
 use RayaCash\Exception\ConflictException;
+use RayaCash\Exception\IdempotencyException;
 use RayaCash\Exception\InvalidRequestException;
 use RayaCash\Exception\NotFoundException;
 use RayaCash\Exception\PermissionDeniedException;
@@ -21,6 +22,7 @@ use RayaCash\Exception\UnprocessableEntityException;
 use RayaCash\HttpClient\TransportException;
 use RayaCash\IdentityVerification;
 use RayaCash\IdentityVerificationFiles;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -36,7 +38,7 @@ use RayaCash\Transfer;
 use RayaCash\User;
 use RayaCash\Util\Uuid;
 
-/** Los 33 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
+/** Los 36 endpoints: método, ruta, query, body y headers exactos (test_endpoints.py). */
 final class EndpointsTest extends TestCase
 {
     private const IDEMPOTENCY_KEY = '9b2f6c4e-1d3a-4e8b-a5c7-0f9e8d7c6b5a';
@@ -2873,6 +2875,527 @@ final class EndpointsTest extends TestCase
         self::assertCount(1, $this->api->requests);
     }
 
+    // --- Facturador: facturas electrónicas de ARCA, con la clave secreta ----------------------
+
+    /**
+     * POST /v1/invoices: el body en el orden de la API (facturador/api_params.py: dni, amount y
+     * metadata), no en el de tu array, con la Idempotency-Key obligatoria. Vuelve 202 con la
+     * factura pending, todavía sin número ni CAE.
+     */
+    public function testInvoiceCreate(): void
+    {
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $invoice = $this->api->client()->invoices->create(
+            [
+                'metadata' => ['pedido' => '1042'],
+                'amount' => 15000,
+                'dni' => Fixtures::INVOICE_DNI,
+            ],
+            ['idempotency_key' => self::IDEMPOTENCY_KEY],
+        );
+        self::assertSame(Invoice::class, $invoice::class);
+        self::assertSame(
+            [Invoice::STATUS_PENDING, Invoice::TYPE_B, null, null],
+            [$invoice->status, $invoice->type, $invoice->number, $invoice->cae],
+        );
+        self::assertSame(
+            [15000, 12396.69, 2603.31],
+            [$invoice->amount, $invoice->net_amount, $invoice->vat_amount],
+        );
+        self::assertSame(
+            [5, Invoice::CONCEPT_PRODUCTS, null],
+            [$invoice->point_of_sale, $invoice->concept, $invoice->issued_on],
+        );
+        $response = $invoice->getLastResponse();
+        self::assertNotNull($response);
+        self::assertSame(
+            [202, self::IDEMPOTENCY_KEY],
+            [$response->httpStatus, $response->idempotencyKey],
+        );
+        $request = $this->api->last();
+        self::assertSame(
+            ['POST', 'https://api.raya.cash/v1/invoices'],
+            [$request->method, $request->url],
+        );
+        self::assertSame(
+            '{"dni":"12345678","amount":15000,"metadata":{"pedido":"1042"}}',
+            $request->body,
+        );
+        self::assertSame('application/json', $request->header('content-type'));
+        self::assertSame(self::IDEMPOTENCY_KEY, $request->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+    }
+
+    #[DataProvider('amountForms')]
+    public function testInvoiceAmountForms(
+        int|float|string|\Stringable $amount,
+        string $expected,
+    ): void {
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $this->api->client()->invoices->create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => $amount],
+            ['idempotency_key' => 'k'],
+        );
+        self::assertSame(
+            '{"dni":"12345678","amount":' . $expected . '}',
+            $this->api->last()->body,
+        );
+    }
+
+    public function testInvoiceCreateSendsOnlyWhatYouPass(): void
+    {
+        $invoices = $this->api->client()->invoices;
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $invoices->create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => '15000.50', 'metadata' => null],
+            ['idempotency_key' => 'venta-1042'],
+        );
+        self::assertSame('{"dni":"12345678","amount":15000.5}', $this->api->last()->body);
+        self::assertSame('venta-1042', $this->api->last()->header('idempotency-key'));
+        // La metadata viaja siempre como objeto JSON: [] va como {}, y un stdClass también vale.
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $invoices->create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => 1, 'metadata' => []],
+            ['idempotency_key' => 'k1'],
+        );
+        self::assertSame('{"dni":"12345678","amount":1,"metadata":{}}', $this->api->last()->body);
+        $metadata = (object) ['pedido' => '1'];
+        $invoices->create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => 1, 'metadata' => $metadata],
+            ['idempotency_key' => 'k2'],
+        );
+        self::assertSame(
+            '{"dni":"12345678","amount":1,"metadata":{"pedido":"1"}}',
+            $this->api->last()->body,
+        );
+        self::assertCount(3, $this->api->requests);
+    }
+
+    /**
+     * Como en transfers->create: nada sale sin la clave de idempotencia (una venta, una factura),
+     * con un parámetro que no es de la API, con la clave entre los parámetros, con una metadata
+     * que no es un objeto o con un monto que no es un número.
+     */
+    public function testInvoiceCreateRejectsWhatCannotWork(): void
+    {
+        $invoices = $this->api->client()->invoices;
+        $params = ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000];
+        $key = ['idempotency_key' => 'k'];
+        // Sin opciones: PHP no deja llamar sin el segundo argumento.
+        self::assertThrows(
+            \ArgumentCountError::class,
+            // @phpstan-ignore arguments.count (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create($params),
+        );
+        $error = self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create($params, []),
+        );
+        self::assertSame(
+            'invoices->create necesita idempotency_key: generá un UUID v4 (por ejemplo, con '
+                . 'RayaCash\Util\Uuid::v4()), guardalo con la venta antes de llamar y reusalo en '
+                . "cada reintento: \$client->invoices->create([...], ['idempotency_key' => "
+                . '$clave]).',
+            $error->getMessage(),
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create($params, ['idempotency_key' => null]),
+            'invoices->create necesita idempotency_key',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $invoices->create($params, ['idempotency_key' => 'con espacios']),
+            'idempotency_key tiene que tener de 1 a 255 caracteres ASCII visibles',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create($params, ['idempotencyKey' => 'k']),
+            'options no acepta "idempotencyKey" (¿quisiste decir idempotency_key?)',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create([Fixtures::INVOICE_DNI, 15000], $key),
+            "invoices->create recibe un array con los nombres de los parámetros, como ['dni' => "
+                . "'12345678', 'amount' => 15000], no una lista.",
+        );
+        // El body es dni, amount y metadata, nada más: el tipo de factura, el punto de venta y el
+        // concepto salen de la configuración de tu Facturador.
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $invoices->create([...$params, 'point_of_sale' => 5], $key),
+            'invoices->create no acepta "point_of_sale": los parámetros son dni, amount y '
+                . 'metadata.',
+        );
+        foreach (['idempotency_key', 'idempotencyKey'] as $name) {
+            self::assertThrows(
+                \TypeError::class,
+                static fn() => $invoices->create([...$params, $name => 'k'], $key),
+                "invoices->create no acepta {$name} entre los parámetros: va en las opciones",
+            );
+        }
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create([...$params, 'metadata' => ['1042']], $key),
+            'metadata tiene que ser un array de string a string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create([...$params, 'metadata' => 'pedido=1042'], $key),
+            'metadata tiene que ser un array de string a string',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => $invoices->create(['dni' => '12345678', 'amount' => true], $key),
+            'amount no puede ser un bool',
+        );
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (a propósito: falta amount)
+            static fn() => $invoices->create(['dni' => '12345678'], $key),
+            'amount tiene que ser un número en pesos',
+        );
+        // Un DNI que no es texto (un número, como lo devuelve una columna INT) o que falta: con
+        // el mismo texto que la API, como en Node.
+        $dni = 'dni tiene que ser un DNI de 6 a 8 dígitos, como texto (por ejemplo, "12345678").';
+        foreach ([12345678, 12345678.0, null] as $value) {
+            $error = self::assertThrows(
+                \TypeError::class,
+                // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+                static fn() => $invoices->create(['dni' => $value, 'amount' => 15000], $key),
+            );
+            self::assertSame($dni, $error->getMessage());
+        }
+        $error = self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (a propósito: falta dni)
+            static fn() => $invoices->create(['amount' => 15000], $key),
+        );
+        self::assertSame($dni, $error->getMessage());
+        self::assertSame([], $this->api->requests);
+    }
+
+    /**
+     * Los dígitos del DNI los valida la API, como en Node y en Python: el string viaja como vino
+     * (con puntos, la API los saca) y uno que no es un DNI vuelve PARAMETER_INVALID, con dni en
+     * getParam() y el mismo texto que el chequeo local.
+     */
+    public function testInvoiceCreateLeavesTheDniDigitsToTheApi(): void
+    {
+        $invoices = $this->api->client()->invoices;
+        $key = ['idempotency_key' => 'k'];
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $invoice = $invoices->create(['dni' => '12.345.678', 'amount' => 15000], $key);
+        self::assertSame('{"dni":"12.345.678","amount":15000}', $this->api->last()->body);
+        self::assertSame(Fixtures::INVOICE_DNI, $invoice->dni);
+
+        $message = 'dni tiene que ser un DNI de 6 a 8 dígitos, como texto (por ejemplo, '
+            . '"12345678").';
+        $this->api->addError(400, 'PARAMETER_INVALID', $message, ['field' => 'dni']);
+        $error = self::assertThrows(
+            InvalidRequestException::class,
+            static fn() => $invoices->create(['dni' => '1234', 'amount' => 15000], $key),
+            $message,
+            'PARAMETER_INVALID',
+        );
+        self::assertSame('dni', $error->getParam());
+        self::assertSame('{"dni":"1234","amount":15000}', $this->api->last()->body);
+        self::assertCount(2, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    public function testInvoiceRetrieve(): void
+    {
+        $this->api->add(200, Fixtures::INVOICE_ISSUED);
+        $invoices = $this->api->client()->invoices;
+        $invoice = $invoices->retrieve(Fixtures::INVOICE_ID);
+        self::assertSame(Invoice::class, $invoice::class);
+        self::assertSame(
+            [Invoice::STATUS_ISSUED, 5, 128, Fixtures::INVOICE_CAE],
+            [$invoice->status, $invoice->point_of_sale, $invoice->number, $invoice->cae],
+        );
+        self::assertSame(
+            ['2026-11-28', '2026-11-18', '2026-11-18T15:12:41Z'],
+            [$invoice->cae_expires_on, $invoice->issued_on, $invoice->issued_at],
+        );
+        self::assertNull($invoice->failure_reason);
+        self::assertSame([], $invoice->arca_messages);
+        self::assertSame(['pedido' => '1042'], $invoice->metadata);
+        $request = $this->api->last();
+        self::assertSame(
+            ['GET', '/v1/invoices/' . Fixtures::INVOICE_ID],
+            [$request->method, $request->path],
+        );
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $request->header('authorization'));
+        self::assertNull($request->header('idempotency-key'));
+        self::assertNull($request->body);
+
+        // Una rechazada: el motivo y lo que dijo ARCA, cada uno con su clase.
+        $this->api->add(200, Fixtures::INVOICE_REJECTED);
+        $rejected = $invoices->retrieve(Fixtures::INVOICE_REJECTED_ID);
+        self::assertSame(Invoice::STATUS_REJECTED, $rejected->status);
+        self::assertSame(Invoice\FailureReason::class, get_debug_type($rejected->failure_reason));
+        self::assertSame(Invoice::FAILURE_CODE_ARCA_REJECTED, $rejected->failure_reason?->code);
+        self::assertCount(1, $rejected->arca_messages);
+        self::assertSame(Invoice\ArcaMessage::class, $rejected->arca_messages[0]::class);
+        self::assertSame(
+            [Invoice\ArcaMessage::TYPE_OBSERVATION, 10015],
+            [$rejected->arca_messages[0]->type, $rejected->arca_messages[0]->code],
+        );
+        self::assertNull($rejected->number);
+        $path = $this->api->last()->path;
+        self::assertSame('/v1/invoices/' . Fixtures::INVOICE_REJECTED_ID, $path);
+        self::assertCount(2, $this->api->requests);
+    }
+
+    /** Los ids, como en el resto: nunca vacíos ni "." o "..", y codificados en la ruta. */
+    public function testInvoiceIdsAreEncodedAndNeverEmpty(): void
+    {
+        $invoices = $this->api->client()->invoices;
+        $this->api->addError(404, 'INVOICE_NOT_FOUND', 'No encontramos esa factura.');
+        self::assertThrows(
+            NotFoundException::class,
+            static fn() => $invoices->retrieve('../balance'),
+            'No encontramos esa factura.',
+            'INVOICE_NOT_FOUND',
+        );
+        self::assertSame('/v1/invoices/..%2Fbalance', $this->api->last()->path);
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $invoices->retrieve(''),
+            'invoiceId no puede estar vacío.',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $invoices->retrieve('..'),
+            'invoiceId no puede ser "." ni "..".',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $invoices->retrieve('inv_x', ['idempotency_key' => 'k']),
+            'La Idempotency-Key solo va en los POST.',
+        );
+        self::assertCount(1, $this->api->requests);
+    }
+
+    public function testInvoiceList(): void
+    {
+        $this->api->add(200, Fixtures::INVOICE_LIST);
+        $invoices = $this->api->client()->invoices;
+        // Los filtros en cualquier orden: la query sale en el de la API.
+        $page = $invoices->list([
+            'cursor' => 'c1',
+            'limit' => 2,
+            'created_lt' => '2026-11-19T00:00:00-03:00',
+            'created_gte' => new \DateTimeImmutable('2026-11-18 03:00', new \DateTimeZone('UTC')),
+            'status' => Invoice::STATUS_REJECTED,
+        ]);
+        self::assertSame(ListObject::class, $page::class);
+        $classes = [];
+        foreach ($page as $invoice) {
+            $classes[] = $invoice::class;
+        }
+        self::assertSame([Invoice::class, Invoice::class], $classes);
+        self::assertSame(
+            [Invoice::STATUS_REJECTED, Invoice::STATUS_ISSUED],
+            [$page->data[0]->status, $page->data[1]->status],
+        );
+        self::assertNull($page->next_cursor);
+        $request = $this->api->last();
+        self::assertSame(['GET', '/v1/invoices'], [$request->method, $request->path]);
+        self::assertSame(
+            [
+                'status' => 'rejected',
+                'created_gte' => '2026-11-18T03:00:00+00:00',
+                'created_lt' => '2026-11-19T00:00:00-03:00',
+                'limit' => '2',
+                'cursor' => 'c1',
+            ],
+            $request->query,
+        );
+        self::assertNull($request->body);
+        // Sin filtros, sin query; y los filtros son los de la API: no se filtra por DNI.
+        $this->api->add(200, Fixtures::INVOICE_LIST);
+        $invoices->list();
+        self::assertSame('https://api.raya.cash/v1/invoices', $this->api->last()->url);
+        self::assertThrows(
+            \TypeError::class,
+            static fn() => $invoices->list(['dni' => Fixtures::INVOICE_DNI]),
+            'invoices->list no acepta "dni": los parámetros son status, created_gte, created_lt, '
+                . 'limit y cursor.',
+        );
+        self::assertThrows(
+            \ValueError::class,
+            static fn() => $invoices->list([], ['idempotency_key' => 'k']),
+            'La Idempotency-Key solo va en los POST.',
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
+    /**
+     * @return iterable<string, array{
+     *     \Closure(RayaClient): mixed,
+     *     int,
+     *     string,
+     *     array<string, string>|null,
+     *     class-string<RayaException>,
+     * }>
+     */
+    public static function invoiceErrors(): iterable
+    {
+        $create = static fn(RayaClient $client): mixed => $client->invoices->create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+            ['idempotency_key' => 'k'],
+        );
+        // El Facturador sin configurar, verificando la conexión con ARCA, con algo para
+        // resolver, con el certificado vencido o desactivado: el motivo en data.reason.
+        $reasons = [
+            'not_configured',
+            'checking',
+            'action_required',
+            'certificate_expired',
+            'disabled',
+        ];
+        foreach ($reasons as $reason) {
+            yield "FACTURADOR_NOT_READY: {$reason}" => [
+                $create,
+                403,
+                'FACTURADOR_NOT_READY',
+                ['reason' => $reason],
+                PermissionDeniedException::class,
+            ];
+        }
+        yield 'INVOICE_NOT_FOUND' => [
+            static fn(RayaClient $client): mixed => $client->invoices->retrieve('inv_x'),
+            404,
+            'INVOICE_NOT_FOUND',
+            null,
+            NotFoundException::class,
+        ];
+        // La misma clave con otro dni o monto: una clave por venta.
+        yield 'IDEMPOTENCY_KEY_REUSED' => [
+            $create,
+            409,
+            'IDEMPOTENCY_KEY_REUSED',
+            null,
+            IdempotencyException::class,
+        ];
+        yield 'PARAMETER_INVALID: amount' => [
+            $create,
+            400,
+            'PARAMETER_INVALID',
+            ['field' => 'amount'],
+            InvalidRequestException::class,
+        ];
+    }
+
+    /**
+     * @param \Closure(RayaClient): mixed $call
+     * @param array<string, string>|null $data
+     * @param class-string<RayaException> $class
+     */
+    #[DataProvider('invoiceErrors')]
+    public function testInvoiceErrors(
+        \Closure $call,
+        int $status,
+        string $code,
+        ?array $data,
+        string $class,
+    ): void {
+        $this->api->addError($status, $code, 'Mensaje de prueba.', $data);
+        $client = $this->api->client();
+        $error = self::assertThrows($class, static fn() => $call($client), errorCode: $code);
+        self::assertSame($class, $error::class);
+        self::assertSame($status, $error->getHttpStatus());
+        self::assertSame('Mensaje de prueba.', $error->getMessage());
+        self::assertSame($data, $error->getData());
+        self::assertCount(1, $this->api->requests);
+        self::assertSame([], $this->sleeps);
+    }
+
+    /**
+     * Un 503 se reintenta con la misma Idempotency-Key y el mismo body (nunca dos facturas por
+     * una venta), y la clave queda en el error si se agotan los intentos. El tope de facturas
+     * abiertas de tu cuenta (429 con Retry-After: 300) y API_UNAVAILABLE no se reintentan.
+     */
+    public function testInvoiceCreateRetriesWithTheSameKey(): void
+    {
+        $invoices = $this->api->client()->invoices;
+        $params = ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000];
+        $this->api->addError(503, 'TEMPORARILY_UNAVAILABLE', headers: ['Retry-After' => '5']);
+        $this->api->add(202, Fixtures::INVOICE_PENDING);
+        $invoice = $invoices->create($params, ['idempotency_key' => 'venta-1042']);
+        self::assertSame(Invoice::STATUS_PENDING, $invoice->status);
+        self::assertSame([5.0], $this->sleeps);
+        [$first, $second] = $this->api->requests;
+        self::assertSame('venta-1042', $first->header('idempotency-key'));
+        self::assertSame('venta-1042', $second->header('idempotency-key'));
+        self::assertSame($first->body, $second->body);
+
+        $this->api->addError(
+            429,
+            'RATE_LIMITED',
+            'Hiciste demasiadas requests. Esperá unos segundos y probá de nuevo.',
+            null,
+            ['Retry-After' => '300'],
+        );
+        $error = self::assertThrows(
+            RateLimitException::class,
+            static fn() => $invoices->create($params, ['idempotency_key' => 'venta-1043']),
+            errorCode: 'RATE_LIMITED',
+        );
+        self::assertSame(300.0, $error->getRetryAfter());
+        self::assertSame('venta-1043', $error->getIdempotencyKey());
+        $this->api->addError(503, 'API_UNAVAILABLE');
+        self::assertThrows(
+            ApiException::class,
+            static fn() => $invoices->create($params, ['idempotency_key' => 'venta-1044']),
+            errorCode: 'API_UNAVAILABLE',
+        );
+        self::assertCount(4, $this->api->requests);
+        self::assertSame([5.0], $this->sleeps);
+    }
+
+    /**
+     * El Facturador emite facturas reales, ante ARCA: con una clave de prueba responde 403
+     * SANDBOX_NOT_SUPPORTED.
+     */
+    public function testInvoiceSandboxNotSupported(): void
+    {
+        $message = 'Este endpoint todavía no está disponible en un sandbox.';
+        $this->api->addError(403, 'SANDBOX_NOT_SUPPORTED', $message);
+        $this->api->addError(403, 'SANDBOX_NOT_SUPPORTED', $message);
+        $invoices = $this->api->client(Fixtures::SANDBOX_KEY)->invoices;
+        self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $invoices->create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                ['idempotency_key' => 'k'],
+            ),
+            $message,
+            'SANDBOX_NOT_SUPPORTED',
+        );
+        self::assertThrows(
+            PermissionDeniedException::class,
+            static fn() => $invoices->list(),
+            $message,
+            'SANDBOX_NOT_SUPPORTED',
+        );
+        self::assertSame(
+            'Bearer ' . Fixtures::SANDBOX_KEY,
+            $this->api->last()->header('authorization'),
+        );
+        self::assertCount(2, $this->api->requests);
+    }
+
     // --- Sandbox: los test helpers, con la clave secreta de prueba ----------------------------
 
     /**
@@ -3501,6 +4024,29 @@ final class EndpointsTest extends TestCase
             'psp->balance->retrieve recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
         ];
+        yield 'invoices->create' => [
+            static fn(RayaClient $client): mixed => $client->invoices->create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                $key,
+                $options,
+            ),
+            'invoices->create recibe 2 argumentos (params y options), no 3: las opciones van en el '
+                . "segundo, como ['api_key' => …].",
+        ];
+        yield 'invoices->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->invoices->retrieve(
+                'inv_x',
+                [],
+                $options,
+            ),
+            'invoices->retrieve recibe 2 argumentos (invoiceId y options), no 3: las opciones van '
+                . "en el segundo, como ['api_key' => …].",
+        ];
+        yield 'invoices->list' => [
+            static fn(RayaClient $client): mixed => $client->invoices->list([], [], $options),
+            'invoices->list recibe 2 argumentos (params y options), no 3: las opciones van en el '
+                . "segundo, como ['api_key' => …].",
+        ];
         // El único con tres: el id, los parámetros y las opciones.
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(RayaClient $client): mixed => $client->testHelpers->payments
@@ -3694,6 +4240,19 @@ final class EndpointsTest extends TestCase
         ];
         yield 'psp->balance->retrieve' => [
             static fn(RayaClient $client): mixed => $client->psp->balance->retrieve($options),
+        ];
+        yield 'invoices->create' => [
+            static fn(RayaClient $client): mixed => $client->invoices->create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                // @phpstan-ignore argument.type (una lista, a propósito)
+                $options,
+            ),
+        ];
+        yield 'invoices->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->invoices->retrieve('inv_x', $options),
+        ];
+        yield 'invoices->list' => [
+            static fn(RayaClient $client): mixed => $client->invoices->list([], $options),
         ];
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(RayaClient $client): mixed => $client->testHelpers->payments

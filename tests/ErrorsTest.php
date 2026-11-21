@@ -31,9 +31,12 @@ use RayaCash\Tests\Support\TestCase;
 final class ErrorsTest extends TestCase
 {
     /**
-     * Los 58 códigos del contrato (api.md › Códigos de error), con los de Identidad
-     * (IDENTITY_NOT_ACTIVATED al final de los 403), los del sandbox y los 7 de Raya PSP, cada uno
-     * al final de su bloque de HTTP.
+     * Los 60 códigos del contrato (api.md › Códigos de error), en el orden de
+     * publicapi/tests_catalog.py de la API: con los de Identidad (IDENTITY_NOT_ACTIVATED después
+     * de PAYOUT_ORIGIN_UNAVAILABLE), los del sandbox (SANDBOX_NOT_SUPPORTED y SANDBOX_ONLY después
+     * de APP_DISABLED), los 7 de Raya PSP, cada uno al final de su bloque de HTTP, y los 2 del
+     * Facturador: FACTURADOR_NOT_READY después de PSP_NOT_ACTIVATED e INVOICE_NOT_FOUND después de
+     * CUSTOMER_NOT_FOUND.
      */
     private const CATALOG = [
         ['INVALID_JSON', 400, InvalidRequestException::class],
@@ -57,19 +60,21 @@ final class ErrorsTest extends TestCase
         ['CONNECTED_ACCOUNT_LOCKED', 403, PermissionDeniedException::class],
         ['CONNECTED_ACCOUNT_NOT_CONFIGURED', 403, PermissionDeniedException::class],
         ['APP_DISABLED', 403, PermissionDeniedException::class],
-        ['PAYOUT_ORIGIN_UNAVAILABLE', 403, PermissionDeniedException::class],
         ['SANDBOX_NOT_SUPPORTED', 403, PermissionDeniedException::class],
         ['SANDBOX_ONLY', 403, PermissionDeniedException::class],
+        ['PAYOUT_ORIGIN_UNAVAILABLE', 403, PermissionDeniedException::class],
         ['IDENTITY_NOT_ACTIVATED', 403, PermissionDeniedException::class],
         ['PSP_NOT_ACTIVATED', 403, PermissionDeniedException::class],
+        ['FACTURADOR_NOT_READY', 403, PermissionDeniedException::class],
         ['TRANSFER_NOT_FOUND', 404, NotFoundException::class],
         ['PAYMENT_NOT_FOUND', 404, NotFoundException::class],
+        ['NOT_FOUND', 404, NotFoundException::class],
         ['USER_NOT_FOUND', 404, NotFoundException::class],
         ['ORDER_NOT_FOUND', 404, NotFoundException::class],
-        ['NOT_FOUND', 404, NotFoundException::class],
         ['PAYOUT_NOT_FOUND', 404, NotFoundException::class],
         ['VERIFICATION_NOT_FOUND', 404, NotFoundException::class],
         ['CUSTOMER_NOT_FOUND', 404, NotFoundException::class],
+        ['INVOICE_NOT_FOUND', 404, NotFoundException::class],
         ['METHOD_NOT_ALLOWED', 405, InvalidRequestException::class],
         ['IDEMPOTENCY_KEY_REUSED', 409, IdempotencyException::class],
         ['IDEMPOTENCY_KEY_IN_USE', 409, IdempotencyException::class],
@@ -98,9 +103,76 @@ final class ErrorsTest extends TestCase
 
     private const PARAMETER_INVALID = 'amount tiene que ser un número con hasta 2 decimales.';
 
-    public function testCatalogHasThe58Codes(): void
+    public function testCatalogHasThe60Codes(): void
     {
-        self::assertCount(58, array_unique(array_column(self::CATALOG, 0)));
+        self::assertCount(60, array_unique(array_column(self::CATALOG, 0)));
+    }
+
+    /**
+     * Los del Facturador van donde los pone la API (publicapi/errors.py): FACTURADOR_NOT_READY
+     * justo después de PSP_NOT_ACTIVATED e INVOICE_NOT_FOUND justo después de CUSTOMER_NOT_FOUND.
+     */
+    public function testTheFacturadorCodesGoWhereTheApiPutsThem(): void
+    {
+        $codes = array_column(self::CATALOG, 0);
+        $next = [
+            'PSP_NOT_ACTIVATED' => 'FACTURADOR_NOT_READY',
+            'CUSTOMER_NOT_FOUND' => 'INVOICE_NOT_FOUND',
+        ];
+        foreach ($next as $before => $code) {
+            $index = array_search($before, $codes, true);
+            self::assertIsInt($index);
+            self::assertSame($code, $codes[$index + 1] ?? null);
+        }
+    }
+
+    /**
+     * El orden de publicapi/tests_catalog.py, así un código nuevo cae en el mismo lugar en los
+     * tres SDKs: los tramos que más se tocaron (los 403 desde APP_DISABLED y los 404) van enteros
+     * y los status nunca bajan.
+     */
+    public function testTheCatalogKeepsTheOrderOfTheApi(): void
+    {
+        $forbidden = [
+            'APP_DISABLED',
+            'SANDBOX_NOT_SUPPORTED',
+            'SANDBOX_ONLY',
+            'PAYOUT_ORIGIN_UNAVAILABLE',
+            'IDENTITY_NOT_ACTIVATED',
+            'PSP_NOT_ACTIVATED',
+            'FACTURADOR_NOT_READY',
+        ];
+        self::assertSame($forbidden, self::catalogRun('APP_DISABLED', 7));
+        $notFound = [
+            'TRANSFER_NOT_FOUND',
+            'PAYMENT_NOT_FOUND',
+            'NOT_FOUND',
+            'USER_NOT_FOUND',
+            'ORDER_NOT_FOUND',
+            'PAYOUT_NOT_FOUND',
+            'VERIFICATION_NOT_FOUND',
+            'CUSTOMER_NOT_FOUND',
+            'INVOICE_NOT_FOUND',
+        ];
+        self::assertSame($notFound, self::catalogRun('TRANSFER_NOT_FOUND', 9));
+        $statuses = array_column(self::CATALOG, 1);
+        $sorted = $statuses;
+        sort($sorted);
+        self::assertSame($sorted, $statuses);
+    }
+
+    /**
+     * Los códigos del catálogo desde $first, $length en total.
+     *
+     * @return list<string>
+     */
+    private static function catalogRun(string $first, int $length): array
+    {
+        $codes = array_column(self::CATALOG, 0);
+        $start = array_search($first, $codes, true);
+        self::assertIsInt($start);
+
+        return array_values(array_slice($codes, $start, $length));
     }
 
     /** @return iterable<string, array{string, int, class-string<RayaException>}> */
@@ -337,6 +409,72 @@ final class ErrorsTest extends TestCase
         self::assertSame($code, $error->getErrorCode());
         self::assertSame($message, $error->getMessage());
         self::assertSame($data, $error->getData());
+        // Ninguno se reintenta: un 4xx no cambia con otro intento.
+        self::assertFalse(Retry::shouldRetryResponse($status, $code, null));
+    }
+
+    /**
+     * Los 2 códigos del Facturador, con el mensaje exacto de la API (publicapi/errors.py):
+     * FACTURADOR_NOT_READY con cada motivo de data.reason, e INVOICE_NOT_FOUND sin data.
+     *
+     * @return iterable<string, array{
+     *     int,
+     *     string,
+     *     string,
+     *     array<string, string>|null,
+     *     class-string<RayaException>,
+     * }>
+     */
+    public static function facturadorCodes(): iterable
+    {
+        $notReady = 'El Facturador todavía no está listo para emitir facturas. Configuralo o mirá '
+            . 'su estado en Negocios › Facturador.';
+        $reasons = [
+            'not_configured',
+            'checking',
+            'action_required',
+            'certificate_expired',
+            'disabled',
+        ];
+        foreach ($reasons as $reason) {
+            yield "FACTURADOR_NOT_READY: {$reason}" => [
+                403,
+                'FACTURADOR_NOT_READY',
+                $notReady,
+                ['reason' => $reason],
+                PermissionDeniedException::class,
+            ];
+        }
+        yield 'INVOICE_NOT_FOUND' => [
+            404,
+            'INVOICE_NOT_FOUND',
+            'No encontramos esa factura.',
+            null,
+            NotFoundException::class,
+        ];
+    }
+
+    /**
+     * @param array<string, string>|null $data
+     * @param class-string<RayaException> $class
+     */
+    #[DataProvider('facturadorCodes')]
+    public function testFacturadorCodesKeepTheirMessageAndData(
+        int $status,
+        string $code,
+        string $message,
+        ?array $data,
+        string $class,
+    ): void {
+        $error = self::makeError(
+            $status,
+            ['error' => ['code' => $code, 'message' => $message, 'data' => $data]],
+        );
+        self::assertSame($class, $error::class);
+        self::assertSame($code, $error->getErrorCode());
+        self::assertSame($message, $error->getMessage());
+        self::assertSame($data, $error->getData());
+        self::assertSame($data['reason'] ?? null, $error->getData()['reason'] ?? null);
         // Ninguno se reintenta: un 4xx no cambia con otro intento.
         self::assertFalse(Retry::shouldRetryResponse($status, $code, null));
     }

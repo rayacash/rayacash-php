@@ -24,6 +24,7 @@ use RayaCash\HttpClient\TransportException;
 use RayaCash\IdentityVerification;
 use RayaCash\Internal\GlobalState;
 use RayaCash\Internal\Secret;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuth;
 use RayaCash\Payment;
@@ -564,6 +565,12 @@ final class SecurityTest extends TestCase
                 => PspTransfer::retrieve('pspt_x', $other),
             'PspTransfer::list' => static fn(): mixed => PspTransfer::list([], $other),
             'PspBalance::retrieve' => static fn(): mixed => PspBalance::retrieve($other),
+            'Invoice::create' => static fn(): mixed => Invoice::create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                ['idempotency_key' => 'k', ...$other],
+            ),
+            'Invoice::retrieve' => static fn(): mixed => Invoice::retrieve('inv_x', $other),
+            'Invoice::list' => static fn(): mixed => Invoice::list([], $other),
         ];
         foreach ($global as $name => $call) {
             yield "ApiException de {$name} con una clave por llamada" => [
@@ -1258,6 +1265,24 @@ final class SecurityTest extends TestCase
             \ArgumentCountError::class,
             '$pspCustomer->recreate recibe 1 argumento (options), no 2',
         ];
+        yield 'invoices->create' => [
+            static fn(MockApi $api): mixed => $api->client()->invoices->create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                ['idempotency_key' => 'k'],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'invoices->create recibe 2 argumentos (params y options), no 3',
+        ];
+        yield 'Invoice::retrieve' => [
+            static fn(MockApi $api): mixed => Invoice::retrieve(
+                'inv_x',
+                [],
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \ArgumentCountError::class,
+            'Invoice::retrieve recibe 2 argumentos (invoiceId y options), no 3',
+        ];
         yield 'testHelpers->payments->simulateTransfer' => [
             static fn(MockApi $api): mixed => $api->client()->testHelpers->payments
                 ->simulateTransfer('p', [], [], ['api_key' => Fixtures::OTHER_KEY]),
@@ -1367,6 +1392,25 @@ final class SecurityTest extends TestCase
             static fn(MockApi $api): mixed => PspCustomer::list(['api_key' => Fixtures::OTHER_KEY]),
             \TypeError::class,
             'psp->customers->list no acepta api_key entre los parámetros: va en las opciones',
+        ];
+        yield 'apiKey entre los parámetros de Invoice::create' => [
+            static fn(MockApi $api): mixed => Invoice::create(
+                [
+                    'dni' => Fixtures::INVOICE_DNI,
+                    'amount' => 15000,
+                    'apiKey' => Fixtures::OTHER_KEY,
+                ],
+                ['idempotency_key' => 'k'],
+            ),
+            \TypeError::class,
+            'invoices->create no acepta apiKey entre los parámetros: va en las opciones',
+        ];
+        yield 'api_key entre los filtros de invoices->list' => [
+            static fn(MockApi $api): mixed => $api->client()->invoices->list(
+                ['api_key' => Fixtures::OTHER_KEY],
+            ),
+            \TypeError::class,
+            'invoices->list no acepta api_key entre los parámetros: va en las opciones',
         ];
         yield 'api_key entre los parámetros de oauth->token' => [
             static fn(MockApi $api): mixed => $api->client(null)->oauth->token(

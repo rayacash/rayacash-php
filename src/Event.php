@@ -8,12 +8,13 @@ namespace RayaCash;
  * Un evento de webhook. Armalo con `Webhook::constructEvent(…)` o `$client->constructEvent(…)`.
  *
  * `$event->data->object` es el Transfer, el Payment, el ConnectOrder, la IdentityVerification,
- * el PspCustomer, la PspTransfer o el PspDocumentRequest tal como estaba cuando ocurrió el
- * evento. Los connect.order.* le llegan al dueño de la app (la cuenta conectada recibe sus
- * payment.*), y los identity.verification.* traen la verificación con person siempre en null:
- * para leerlo, pedí la verificación con retrieve(). Los psp.* son de los clientes de tu empresa
- * en Raya PSP. webhook.test (el botón «Enviar evento de prueba») trae `{"object": "test", …}`:
- * respondé 2xx e ignoralo. Pueden sumarse tipos nuevos: tu código tiene que ignorarlos.
+ * la Invoice, el PspCustomer, la PspTransfer o el PspDocumentRequest tal como estaba cuando
+ * ocurrió el evento. Los connect.order.* le llegan al dueño de la app (la cuenta conectada recibe
+ * sus payment.*), y los identity.verification.* traen la verificación con person siempre en null:
+ * para leerlo, pedí la verificación con retrieve(). Los invoice.* son de las facturas que emitís
+ * con el Facturador, y los psp.*, de los clientes de tu empresa en Raya PSP. webhook.test (el
+ * botón «Enviar evento de prueba») trae `{"object": "test", …}`: respondé 2xx e ignoralo. Pueden
+ * sumarse tipos nuevos: tu código tiene que ignorarlos.
  *
  * @property-read string $id evt_…: el mismo valor que el header Raya-Event-Id. Procesalo una vez.
  * @property-read 'event' $object
@@ -22,7 +23,8 @@ namespace RayaCash;
  *     |'payment.succeeded'|'payment.failed'|'payment.refunded'|'connect.order.created'
  *     |'connect.order.succeeded'|'connect.order.failed'|'connect.order.refunded'
  *     |'identity.verification.verified'|'identity.verification.declined'
- *     |'identity.verification.expired'|'identity.verification.canceled'
+ *     |'identity.verification.expired'|'identity.verification.canceled'|'invoice.issued'
+ *     |'invoice.rejected'|'invoice.failed'
  *     |'psp.customer.activated'|'psp.customer.updated'|'psp.customer.failed'
  *     |'psp.customer.rejected'|'psp.customer.blocked'|'psp.customer.unblocked'
  *     |'psp.customer.closed'|'psp.transfer.received'|'psp.transfer.sent'
@@ -57,6 +59,9 @@ final class Event extends RayaObject
     public const TYPE_IDENTITY_VERIFICATION_DECLINED = 'identity.verification.declined';
     public const TYPE_IDENTITY_VERIFICATION_EXPIRED = 'identity.verification.expired';
     public const TYPE_IDENTITY_VERIFICATION_CANCELED = 'identity.verification.canceled';
+    public const TYPE_INVOICE_ISSUED = 'invoice.issued';
+    public const TYPE_INVOICE_REJECTED = 'invoice.rejected';
+    public const TYPE_INVOICE_FAILED = 'invoice.failed';
     public const TYPE_PSP_CUSTOMER_ACTIVATED = 'psp.customer.activated';
     public const TYPE_PSP_CUSTOMER_UPDATED = 'psp.customer.updated';
     public const TYPE_PSP_CUSTOMER_FAILED = 'psp.customer.failed';

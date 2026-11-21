@@ -1,6 +1,6 @@
 # rayacash-php
 
-El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos. Y si tu aplicación cobra a nombre de otras cuentas de Raya (un marketplace, una plataforma), conectarlas y crear pagos a su nombre con tu comisión, y enviarles pesos a tus vendedores desde tu saldo con payouts ([Raya Connect](#raya-connect)). También te deja verificar la identidad de tus clientes con su DNI, una prueba de vida y el Registro Nacional de las Personas ([Identidad](#identidad)). Y darles a los clientes de tu empresa una cuenta con un CVU a su nombre y transferir en su nombre ([Raya PSP](#raya-psp)).
+El SDK oficial de PHP para la [API de Raya Cash](https://raya.cash/api). Te deja cobrar por transferencia con un CVU exclusivo por pago, mandar plata a cualquier CBU, CVU o alias, consultar tu saldo, conciliar tus depósitos y verificar los webhooks, con reintentos seguros e idempotencia incluidos. Y si tu aplicación cobra a nombre de otras cuentas de Raya (un marketplace, una plataforma), conectarlas y crear pagos a su nombre con tu comisión, y enviarles pesos a tus vendedores desde tu saldo con payouts ([Raya Connect](#raya-connect)). También te deja verificar la identidad de tus clientes con su DNI, una prueba de vida y el Registro Nacional de las Personas ([Identidad](#identidad)). Y darles a los clientes de tu empresa una cuenta con un CVU a su nombre y transferir en su nombre ([Raya PSP](#raya-psp)), y emitir facturas electrónicas de ARCA a nombre de quien te compró ([Facturador](#facturador)).
 
 ```php
 use RayaCash\RayaClient;
@@ -11,7 +11,7 @@ $payment = $client->payments->create(['amount' => 15000, 'description' => 'Pedid
 echo $payment->bank_transfer->cvu, ' ', $payment->checkout_url, "\n";
 ```
 
-Versión 1.3.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
+Versión 1.4.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. Los cambios de cada versión están en [CHANGELOG.md](CHANGELOG.md).
 
 ## Contenido
 
@@ -29,6 +29,7 @@ Versión 1.3.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 - [Raya Connect](#raya-connect)
 - [Identidad](#identidad)
 - [Raya PSP](#raya-psp)
+- [Facturador](#facturador)
 - [Sandbox](#sandbox)
 - [Tests de tu integración](#tests-de-tu-integración)
 - [Configuración avanzada](#configuración-avanzada)
@@ -46,6 +47,7 @@ Versión 1.3.0. Requiere PHP 8.1 o más nuevo, con las extensiones curl y json. 
 6. **Para enviar payouts a tus vendedores:** el descriptor del comercio configurado en [Configuración › Negocio](https://raya.cash/dashboard/settings/business). Sin eso, crear un payout da `PAYOUT_ORIGIN_UNAVAILABLE`. Ver [Payouts](#payouts).
 7. **Para verificar la identidad de tus clientes:** Identidad activada en tu cuenta (la pedís desde [Identidad](https://raya.cash/dashboard/identity), en el dashboard: nos contás para qué la vas a usar y revisamos tu solicitud; hasta que la aprobemos, crear una verificación da `IDENTITY_NOT_ACTIVATED`) y, para el resultado, un destino de webhooks con los eventos de «Identidad». Identidad todavía no está disponible en el [sandbox](#sandbox): con una clave de prueba (`raya_sk_test_…`) responde 403 `SANDBOX_NOT_SUPPORTED`. Ver [Identidad](#identidad).
 8. **Para darles a tus clientes una cuenta con un CVU a su nombre:** una cuenta de empresa con Raya PSP activado (lo pedís desde [Raya PSP](https://raya.cash/dashboard/psp/customers), en el dashboard; hasta que lo aprobemos, crear un cliente da `PSP_NOT_ACTIVATED`) y, para enterarte de lo que reciben, un destino de webhooks con los eventos de «Raya PSP». Ver [Raya PSP](#raya-psp).
+9. **Para emitir facturas electrónicas:** el Facturador configurado en [Negocios › Facturador](https://raya.cash/dashboard/invoicing), en el dashboard: tu punto de venta de ARCA, tu certificado y su clave privada, tu condición frente al IVA y el concepto (hasta que esté listo, crear una factura da `FACTURADOR_NOT_READY`) y, para el resultado, un destino de webhooks con los eventos de «Facturador». Solo en tu cuenta real: con una clave de prueba responde 403 `SANDBOX_NOT_SUPPORTED`. Ver [Facturador](#facturador).
 
 ## Instalación
 
@@ -114,7 +116,7 @@ foreach ($page->autoPagingIter() as $deposit) {
 
 Cada método recibe los parámetros en un array, con los nombres de la API (`external_reference`, `created_gte`), y las opciones de la llamada, como la `idempotency_key`, en otro array: el último argumento. Un parámetro o una opción que no existe falla antes de mandar nada (con «¿quisiste decir…?» si escribiste `externalReference`).
 
-Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject`; en Raya Connect, `OAuthToken`, `User`, `ConnectOrder` y `ConnectPayout`, en Identidad, `IdentityVerification` e `IdentityVerificationFiles`, y en Raya PSP, `PspCustomer`, `PspCustomerBalance`, `PspTransfer` y `PspBalance`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
+Cada respuesta es un objeto del SDK (`Balance`, `Transfer`, `Payment`, `Event`, `ListObject`; en Raya Connect, `OAuthToken`, `User`, `ConnectOrder` y `ConnectPayout`, en Identidad, `IdentityVerification` e `IdentityVerificationFiles`, en Raya PSP, `PspCustomer`, `PspCustomerBalance`, `PspTransfer` y `PspBalance`, y en el Facturador, `Invoice`): `$payment->status` y `$payment['status']` dan lo mismo, `json_encode($payment)` da el JSON exacto de la API (con el `serialize_precision` de fábrica, `-1`) y `$payment->toArray()`, arrays comunes. Los valores vienen tal como los manda la API: montos `int` o `float` y fechas en string ISO 8601 (`'2026-10-24T14:00:00Z'`). Si la API suma un campo nuevo, lo ves igual (`$payment['campo_nuevo']`). Leer un campo que no existe tira `\OutOfBoundsException`; para uno que puede faltar, `$payment->campo ?? null` e `isset($payment->campo)` nunca fallan. Los estados y tipos tienen constantes (`Payment::STATUS_SUCCEEDED`, `Transfer::DIRECTION_INBOUND`, `Event::TYPE_PAYMENT_SUCCEEDED`…), y pueden sumarse valores: tu código tiene que ignorar los que no conoce.
 
 Cada objeto trae `getLastResponse()`, con el `requestId` (`req_…`) que nos tenés que mandar si escribís a soporte:
 
@@ -145,7 +147,7 @@ $transfer = Transfer::create(
 $page = Transfer::list(['direction' => 'inbound']);
 ```
 
-También están `OAuth::token()`, `User::retrieve()`, `ConnectOrder::create()`, `ConnectOrder::retrieve()` y `ConnectOrder::refundById()` (ver [Raya Connect](#raya-connect)): con la clave global puesta en el `access_token` de la cuenta conectada. Los payouts (`ConnectPayout::create()`, `ConnectPayout::retrieve()` y `ConnectPayout::list()`) van con tu clave secreta, como las transferencias, y las verificaciones de identidad también: `IdentityVerification::create()`, `retrieve()`, `list()`, `cancelById()` y `files()`, y `$verification->cancel()` (ver [Identidad](#identidad)), y Raya PSP: `PspCustomer::create()`, `retrieve()`, `list()`, `retrieveBalance()`, `blockById()`, `unblockById()`, `closeById()` y `recreateById()`, `$pspCustomer->block()`, `unblock()`, `close()` y `recreate()`, `PspTransfer::create()`, `retrieve()` y `list()`, y `PspBalance::retrieve()` (ver [Raya PSP](#raya-psp)). En un [sandbox](#sandbox), con su clave secreta de prueba como clave global, también `Payment::simulateTransfer()`. Como la configuración global dura todo el proceso, para operar con varias cuentas conectadas usá un `RayaClient` por cuenta.
+También están `OAuth::token()`, `User::retrieve()`, `ConnectOrder::create()`, `ConnectOrder::retrieve()` y `ConnectOrder::refundById()` (ver [Raya Connect](#raya-connect)): con la clave global puesta en el `access_token` de la cuenta conectada. Los payouts (`ConnectPayout::create()`, `ConnectPayout::retrieve()` y `ConnectPayout::list()`) van con tu clave secreta, como las transferencias, y las verificaciones de identidad también: `IdentityVerification::create()`, `retrieve()`, `list()`, `cancelById()` y `files()`, y `$verification->cancel()` (ver [Identidad](#identidad)), y Raya PSP: `PspCustomer::create()`, `retrieve()`, `list()`, `retrieveBalance()`, `blockById()`, `unblockById()`, `closeById()` y `recreateById()`, `$pspCustomer->block()`, `unblock()`, `close()` y `recreate()`, `PspTransfer::create()`, `retrieve()` y `list()`, y `PspBalance::retrieve()` (ver [Raya PSP](#raya-psp)), y el Facturador: `Invoice::create()`, `retrieve()` y `list()` (ver [Facturador](#facturador)). En un [sandbox](#sandbox), con su clave secreta de prueba como clave global, también `Payment::simulateTransfer()`. Como la configuración global dura todo el proceso, para operar con varias cuentas conectadas usá un `RayaClient` por cuenta.
 
 Los dos estilos usan el mismo núcleo y se comportan igual. La configuración global se lee en cada request, así que cambiarla entre llamadas surte efecto enseguida. Cada valor se valida al asignarlo, salvo la clave, que se valida en cada request: así un `.env` vacío no rompe el arranque de tu framework. Preferí `RayaClient` si tu proceso usa más de una clave o si querés configurar cada cliente por separado. `$payment->refund()` usa el cliente del que vino el pago: si lo trajiste con un `RayaClient`, usa ese cliente; si no, la configuración global. PHP no deja tener un `refund()` estático y otro de instancia, por eso el reembolso por id del estilo global es `Payment::refundById()`.
 
@@ -281,12 +283,12 @@ echo number_format($cents / 100, 2, '.', ''); // exacto: "48169.59"
 
 Con una `Idempotency-Key` podés reintentar un POST sin miedo a que se haga dos veces: si ya lo procesamos, te devolvemos el mismo resultado.
 
-- **`transfers->create` y `connect->payouts->create` exigen la `idempotency_key`.** Generá un UUID v4 (`RayaCash\Util\Uuid::v4()`) para cada transferencia o payout, **guardalo con la operación en tu base antes de llamar** y reusalo en cada reintento. Así, si tu proceso se corta después de mandar la request, el reintento no envía la plata dos veces.
+- **`transfers->create`, `connect->payouts->create`, `psp->transfers->create` e `invoices->create` exigen la `idempotency_key`.** Generá un UUID v4 (`RayaCash\Util\Uuid::v4()`) para cada transferencia, payout o factura, **guardalo con la operación en tu base antes de llamar** y reusalo en cada reintento. Así, si tu proceso se corta después de mandar la request, el reintento no envía la plata dos veces ni emite dos facturas por una venta.
 - En `payments->create` y `payments->refund` es opcional pero recomendada, como en `identity->verifications->create` y `cancel`. Si no la pasás, el SDK genera una que protege solo los reintentos de esa llamada.
 - `oauth->token` y el test helper del [sandbox](#sandbox) (`testHelpers->payments->simulateTransfer()`) son los únicos POST sin `Idempotency-Key`, y sus opciones no aceptan `idempotency_key`: el `code` se canjea una sola vez y un pago se simula una sola vez.
 - El SDK reintenta siempre con la misma clave. La que usó queda en `$obj->getLastResponse()->idempotencyKey` y en `$e->getIdempotencyKey()`, para que puedas reintentar más tarde.
 - Guardamos cada clave 24 horas, para toda tu cuenta. Usar la misma clave con otros parámetros da `IdempotencyException` con `getErrorCode() === 'IDEMPOTENCY_KEY_REUSED'`.
-- Si una transferencia o un payout terminó `failed`, para intentarlo de nuevo usá una clave **nueva**: con la misma te devolvemos la respuesta original.
+- Si una transferencia o un payout terminó `failed`, o una factura `rejected` o `failed`, para intentarlo de nuevo usá una clave **nueva**: con la misma te devolvemos la respuesta original.
 
 ```php
 use RayaCash\Exception\ApiConnectionException;
@@ -362,9 +364,9 @@ Todas las excepciones del SDK extienden `RayaCash\Exception\RayaException` (que 
 | Clase | HTTP | Códigos | Qué hacer |
 |---|---|---|---|
 | `InvalidRequestException` | 400, 405, 413 y los demás `4xx` | `PARAMETER_MISSING`, `PARAMETER_INVALID`, `PARAMETER_UNKNOWN`, `INVALID_JSON`, `OAUTH_GRANT_INVALID`, `OAUTH_GRANT_TYPE_UNSUPPORTED`… | Corregí la request: `$e->getParam()` dice qué parámetro falló. Con `OAUTH_GRANT_INVALID`, el code ya se usó o venció: la cuenta tiene que volver a autorizar. |
-| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `USER_NOT_FOUND`, `ORDER_NOT_FOUND`, `PAYOUT_NOT_FOUND`, `VERIFICATION_NOT_FOUND`, `CUSTOMER_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta (o de la cuenta conectada). |
+| `NotFoundException` (subclase de la anterior) | 404 | `PAYMENT_NOT_FOUND`, `TRANSFER_NOT_FOUND`, `USER_NOT_FOUND`, `ORDER_NOT_FOUND`, `PAYOUT_NOT_FOUND`, `VERIFICATION_NOT_FOUND`, `CUSTOMER_NOT_FOUND`, `INVOICE_NOT_FOUND`, `NOT_FOUND` | No existe o no es de tu cuenta (o de la cuenta conectada). |
 | `AuthenticationException` | 401 | `API_KEY_MISSING`, `API_KEY_INVALID`, `API_KEY_EXPIRED`, `ACCESS_TOKEN_MISSING`, `ACCESS_TOKEN_INVALID`, `ACCESS_TOKEN_REVOKED`, `OAUTH_CLIENT_INVALID`… | Revisá la clave secreta (o el access_token: con `ACCESS_TOKEN_REVOKED`, la cuenta desconectó tu app). |
-| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED`, `CONNECTED_ACCOUNT_LOCKED`, `CONNECTED_ACCOUNT_NOT_CONFIGURED`, `APP_DISABLED`, `PAYOUT_ORIGIN_UNAVAILABLE`, `SANDBOX_NOT_SUPPORTED`, `SANDBOX_ONLY`, `IDENTITY_NOT_ACTIVATED`, `PSP_NOT_ACTIVATED` | La cuenta (o la cuenta conectada, o tu app) no puede hacer esto todavía. `SANDBOX_NOT_SUPPORTED`: ese endpoint todavía no está disponible en el sandbox (usaste una credencial de prueba), como los de Identidad. `SANDBOX_ONLY`: `testHelpers` solo funciona en un [sandbox](#sandbox), con su clave secreta de prueba. `IDENTITY_NOT_ACTIVATED`: activá Identidad desde el dashboard antes de crear verificaciones. `PSP_NOT_ACTIVATED`: tu cuenta todavía no tiene [Raya PSP](#raya-psp) activado. Si no los aprobamos, escribinos a soporte@raya.cash. |
+| `PermissionDeniedException` | 403 | `API_KEY_ACCOUNT_LOCKED`, `API_NOT_ENABLED`, `MERCHANT_NOT_CONFIGURED`, `TRANSFERS_BLOCKED`, `CONNECTED_ACCOUNT_LOCKED`, `CONNECTED_ACCOUNT_NOT_CONFIGURED`, `APP_DISABLED`, `PAYOUT_ORIGIN_UNAVAILABLE`, `SANDBOX_NOT_SUPPORTED`, `SANDBOX_ONLY`, `IDENTITY_NOT_ACTIVATED`, `PSP_NOT_ACTIVATED`, `FACTURADOR_NOT_READY` | La cuenta (o la cuenta conectada, o tu app) no puede hacer esto todavía. `SANDBOX_NOT_SUPPORTED`: ese endpoint todavía no está disponible en el sandbox (usaste una credencial de prueba), como los de Identidad. `SANDBOX_ONLY`: `testHelpers` solo funciona en un [sandbox](#sandbox), con su clave secreta de prueba. `IDENTITY_NOT_ACTIVATED`: activá Identidad desde el dashboard antes de crear verificaciones. `PSP_NOT_ACTIVATED`: tu cuenta todavía no tiene [Raya PSP](#raya-psp) activado. Si no los aprobamos, escribinos a soporte@raya.cash. `FACTURADOR_NOT_READY`: tu [Facturador](#facturador) todavía no puede emitir (el motivo, en `$e->getData()['reason']`): revisalo en Negocios › Facturador. |
 | `IdempotencyException` (subclase de la siguiente: atrapala antes) | 409 | `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_USE` | Una clave por operación; si está en uso, reintentá más tarde con la misma. |
 | `ConflictException` | 409 | `PAYMENT_NOT_REFUNDABLE`, `PAYMENT_NOT_PENDING`, `VERIFICATION_NOT_CANCELABLE`, `CUSTOMER_ALREADY_EXISTS`, `CUSTOMER_STATUS_CONFLICT` | Mirá `$e->getData()['status']` (el estado del pago, de la verificación o del cliente) y, en un reembolso, `$e->getData()['reason'] ?? null`. `PAYMENT_NOT_PENDING`: en un sandbox, ese pago ya no se puede simular. `CUSTOMER_ALREADY_EXISTS`: ya tenés ese cliente de Raya PSP, con ese CUIL o CUIT o con esa verificación de Identidad (su `id`, en `$e->getData()['customer']`). `CUSTOMER_STATUS_CONFLICT`: el estado del cliente no permite la operación (quién lo bloqueó, en `$e->getData()['blocked_by']`). |
 | `UnprocessableEntityException` | 422 | `INSUFFICIENT_BALANCE`, `LIMIT_EXCEEDED`, `DESTINATION_NOT_FOUND`, `DESTINATION_INACTIVE`, `DESTINATION_NOT_SUPPORTED`, `REFUND_FAILED`, `CUSTOMER_INSUFFICIENT_BALANCE`, `CUSTOMER_DATA_MISMATCH`, `TAX_ID_NOT_REGISTERED` | No se arregla reintentando: mostráselo a la persona. En Raya PSP, `CUSTOMER_DATA_MISMATCH` es la razón social de una persona jurídica que no coincide con la del Registro Nacional de Sociedades (`name`, en `$e->getData()['field']`). |
@@ -440,9 +442,10 @@ http_response_code(200);
 - **En Laravel, la ruta va sin CSRF** (la llama Raya, no un navegador: la firma reemplaza al token). En Laravel 11 o más nuevo, con `$middleware->validateCsrfTokens(except: ['webhooks/raya'])` en `bootstrap/app.php`; en Laravel 10, en el `$except` de `VerifyCsrfToken`.
 - Respondé `2xx` en menos de 15 segundos. Si tenés que hacer algo lento, guardá el evento, respondé y procesalo después.
 - El mismo evento puede llegar más de una vez y desordenado: guardá los `$event->id` que procesaste y, si necesitás el estado actual, consultá el objeto con la API.
-- `$event->data->object` es el `Transfer`, el `Payment`, el `ConnectOrder`, la `IdentityVerification`, el `PspCustomer`, la `PspTransfer` o el `PspDocumentRequest` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
+- `$event->data->object` es el `Transfer`, el `Payment`, el `ConnectOrder`, la `IdentityVerification`, la `Invoice`, el `PspCustomer`, la `PspTransfer` o el `PspDocumentRequest` tal como estaba cuando ocurrió el evento: distinguilos con `instanceof`. Leelo con `?? null`: un tipo de evento nuevo puede no traer `data`.
 - Si tu aplicación cobra a nombre de otras cuentas, recibís `connect.order.created`, `connect.order.succeeded`, `connect.order.failed` y `connect.order.refunded` (`Event::TYPE_CONNECT_ORDER_*`), con el `ConnectOrder`; la cuenta conectada recibe sus `payment.*`. Ver [Raya Connect](#raya-connect).
 - Si verificás la identidad de tus clientes, recibís `identity.verification.verified`, `identity.verification.declined`, `identity.verification.expired` e `identity.verification.canceled` (`Event::TYPE_IDENTITY_VERIFICATION_*`), con la `IdentityVerification`, siempre con `person` en `null`. Ver [Identidad](#identidad).
+- Si emitís facturas con el Facturador, recibís `invoice.issued`, `invoice.rejected` e `invoice.failed` (`Event::TYPE_INVOICE_*`), con la `Invoice`. Ver [Facturador](#facturador).
 - Si tu empresa tiene Raya PSP, recibís los eventos de tus clientes (`Event::TYPE_PSP_*`): `psp.customer.activated`, `psp.customer.updated`, `psp.customer.failed`, `psp.customer.rejected`, `psp.customer.blocked`, `psp.customer.unblocked` y `psp.customer.closed`, con el `PspCustomer`; `psp.transfer.received`, `psp.transfer.sent` y `psp.transfer.failed`, con la `PspTransfer`, y `psp.document_request.created` y `psp.document_request.closed`, con el `PspDocumentRequest`. Ver [Raya PSP](#raya-psp).
 - «Enviar evento de prueba» (en Developers › Webhooks) manda un `webhook.test`: respondé `2xx` e ignoralo.
 - `$event->livemode` es `true` en tu cuenta real y `false` en un [sandbox](#sandbox). Un evento creado antes de que la API sumara el campo no lo trae si se reenvía: leelo con `$event->livemode ?? true`.
@@ -883,6 +886,92 @@ if ($event->type === Event::TYPE_PSP_CUSTOMER_ACTIVATED && $object instanceof Ps
 
 `$client->psp` existe desde la 1.3.0. La referencia completa de Raya PSP está en https://raya.cash/api/psp.
 
+## Facturador
+
+Con el [Facturador](https://raya.cash/api/invoices) emitís facturas electrónicas de ARCA desde tu sistema: nos mandás el DNI de quien te compró y el total, y la emitimos con tu certificado y tu punto de venta. Es una Factura B si sos Responsable Inscripto (el total incluye el IVA del 21 %, que la factura discrimina) o una Factura C si sos monotributista (sin IVA), según la condición frente al IVA que elegiste al configurarlo. Va con tu clave secreta, desde tu servidor, y solo en tu cuenta real: cada factura es real, ante ARCA, así que el Facturador no está disponible en el [sandbox](#sandbox) (con una clave de prueba, `raya_sk_test_…`, responde 403 `SANDBOX_NOT_SUPPORTED`). El flujo:
+
+1. **Configurás el Facturador** en [Negocios › Facturador](https://raya.cash/dashboard/invoicing), en el dashboard: tu punto de venta de ARCA (uno de tipo web services que uses solo para Raya: si otro sistema emite con el mismo, la numeración choca), tu certificado de ARCA y su clave privada, tu condición frente al IVA y el concepto (productos, servicios o productos y servicios). Verificamos la conexión con ARCA en unos segundos y, hasta que esté listo, crear una factura da `PermissionDeniedException` con `getErrorCode() === 'FACTURADOR_NOT_READY'`.
+2. **Creás la factura** de cada venta con `$client->invoices->create()`: responde `202` con la factura `pending`. La `idempotency_key` es obligatoria.
+3. **Te avisamos el resultado** con el webhook `invoice.issued` (ARCA la autorizó: ya tiene su número y su CAE), `invoice.rejected` (ARCA la rechazó) o `invoice.failed` (no pudimos emitirla).
+4. **La leés** con `$client->invoices->retrieve()`, y recorrés tus facturas con `$client->invoices->list()`.
+
+```php
+use RayaCash\Exception\PermissionDeniedException;
+use RayaCash\Invoice;
+use RayaCash\RayaClient;
+
+$client = new RayaClient(); // lee RAYA_SECRET_KEY
+
+// 2. La factura de una venta: el DNI de quien te compró (como texto) y el total, en pesos.
+// La idempotency_key es obligatoria: guardala con la venta ANTES de llamar.
+try {
+    $invoice = $client->invoices->create(
+        ['dni' => '12345678', 'amount' => 15000, 'metadata' => ['pedido' => '1042']],
+        ['idempotency_key' => $order->invoice_idempotency_key], // un UUID v4 guardado antes
+    );
+} catch (PermissionDeniedException $e) {
+    if ($e->getErrorCode() === 'FACTURADOR_NOT_READY') {
+        echo 'Tu Facturador no está listo: ', $e->getData()['reason'] ?? '', "\n";
+    }
+    throw $e;
+}
+echo $invoice->id, ' ', $invoice->status, "\n"; // pending: te avisamos con invoice.*
+
+// 4. Al recibir invoice.issued (o más tarde): su número y su CAE.
+$invoice = $client->invoices->retrieve($invoice->id);
+if ($invoice->status === Invoice::STATUS_ISSUED) {
+    // 00005-00000128 CAE 76543210987654
+    printf("%05d-%08d CAE %s\n", $invoice->point_of_sale, $invoice->number, $invoice->cae);
+}
+
+// Tus facturas emitidas de un mes, de la más nueva a la más vieja.
+$page = $client->invoices->list([
+    'status' => 'issued',
+    'created_gte' => '2026-11-01T00:00:00-03:00',
+    'created_lt' => '2026-12-01T00:00:00-03:00',
+]);
+foreach ($page->autoPagingIter() as $invoice) {
+    echo $invoice->number, ' ', $invoice->amount, ' ', $invoice->cae, "\n";
+}
+```
+
+| Método | Request | Devuelve |
+|---|---|---|
+| `$client->invoices->create([…], ['idempotency_key' => …])` | `POST /v1/invoices` | `Invoice`, `pending` (HTTP 202) |
+| `$client->invoices->retrieve($invoiceId)` | `GET /v1/invoices/:id` | `Invoice` |
+| `$client->invoices->list([…])` | `GET /v1/invoices` | `ListObject` de `Invoice` |
+
+- **`create` recibe** `dni` (el DNI de quien te compró, de 6 a 8 dígitos, siempre como string: `'12345678'`; si viene con puntos o con ceros adelante, se los sacamos), `amount` (el total, en pesos, como en [Montos](#montos)) y `metadata` (hasta 20 pares de texto), nada más: el tipo de factura, el punto de venta y el concepto salen de tu Facturador. La `idempotency_key` es obligatoria, como en las transferencias: guardala con la venta antes de llamar y reusala en cada reintento, así nunca se emiten dos facturas por una venta. Antes de mandar nada fallan, con `\TypeError`, un parámetro que no es de la API, un `dni` que no es un string (como un número, que es lo que suele devolver una columna `INT` de tu base), una `metadata` que no es un array asociativo y un `amount` que no es un número; los dígitos del `dni` los valida la API (`PARAMETER_INVALID`, con `dni` en `$e->getParam()`).
+- **El total:** en una Factura B, `amount` incluye el IVA del 21 %, que la factura discrimina en `net_amount` (el neto) y `vat_amount` (el IVA): los dos suman `amount`, al centavo. En una Factura C, `net_amount` es `amount` y `vat_amount` viene en `null`. En una Factura B, `amount` es de al menos `0.03` (con `0.01` o `0.02` el IVA da cero; una C acepta desde `0.01`): con menos, `create` tira `InvalidRequestException` con `PARAMETER_INVALID`, `amount` en `$e->getParam()` y el mensaje «amount tiene que ser de al menos 0.03 en una Factura B: con menos, el IVA del 21 % da cero y ARCA la rechaza.»
+- **Los estados** (`Invoice::STATUS_*`): `pending` (la estamos emitiendo; si ARCA no responde, seguimos hasta confirmar el resultado), `issued` (ARCA la autorizó: tiene `number`, `cae`, `cae_expires_on` e `issued_on`), `rejected` (ARCA la rechazó: no se emitió) y `failed` (no pudimos emitirla y no quedó registrada en ARCA). Dala por emitida solo con `issued`. Pueden sumarse valores.
+- **Por qué no se emitió**, en `failure_reason->code` (`Invoice::FAILURE_CODE_*`): `arca_rejected` (la rechazó ARCA), `facturador_not_ready` (tu Facturador no estaba listo para emitirla: revisalo en Negocios › Facturador), `not_issued` (no pudimos emitirla), `numbering_conflict` (otro sistema emitió comprobantes con el mismo punto de venta: usá uno solo para Raya) y `account_unavailable` (tu cuenta no puede emitir facturas en este momento: escribinos a soporte@raya.cash). Salvo con `account_unavailable`, después creá la factura de nuevo, con una `idempotency_key` nueva. `arca_messages` trae los errores y las observaciones de ARCA tal cual (`type`, `error` u `observation`; `code` y `message`): una emitida también puede traer observaciones.
+- **`FACTURADOR_NOT_READY`** (403, en `create`): tu Facturador todavía no puede emitir. El motivo, en `$e->getData()['reason']`: `not_configured` (todavía no lo configuraste), `checking` (estamos verificando la conexión con ARCA: probá de nuevo en unos segundos), `action_required` (hay algo para resolver: mirá su estado en el dashboard), `certificate_expired` (venció tu certificado: cargá uno nuevo) o `disabled` (lo desactivaste).
+- **La lista** acepta `status`, `created_gte`, `created_lt`, `limit` y `cursor` (el `next_cursor` de la página anterior; no se filtra por DNI: sería un dato personal en la URL), y se recorre con `autoPagingIter()`, como la de transferencias ([Paginación](#paginación)). Una factura que no existe o no es tuya da `INVOICE_NOT_FOUND` (404, `NotFoundException`).
+- **Estilo global:** con `RayaCash::setApiKey($secretKey)`, `Invoice::create([…], ['idempotency_key' => …])`, `Invoice::retrieve($id)` e `Invoice::list([…])`. Hay un ejemplo en [`examples/emitir-una-factura.php`](examples/emitir-una-factura.php).
+
+**Los webhooks** te avisan el resultado de cada factura. Verificá la firma como en [Webhooks](#webhooks): `$event->data->object` es la `Invoice` tal como quedó. Los elegís en [Developers › Webhooks](https://raya.cash/dashboard/developers/webhooks), en el grupo «Facturador», que aparece cuando tu cuenta puede usar el Facturador.
+
+| Evento | Cuándo |
+|---|---|
+| `invoice.issued` (`Event::TYPE_INVOICE_ISSUED`) | ARCA autorizó una factura que creaste y le asignó su CAE. |
+| `invoice.rejected` (`Event::TYPE_INVOICE_REJECTED`) | ARCA rechazó una factura que creaste: no se emitió. |
+| `invoice.failed` (`Event::TYPE_INVOICE_FAILED`) | No pudimos emitir una factura que creaste: no quedó registrada en ARCA. |
+
+```php
+use RayaCash\Event;
+use RayaCash\Invoice;
+
+// $event, de Webhook::constructEvent(…), ya con la firma verificada.
+$object = $event->data->object ?? null;
+if ($event->type === Event::TYPE_INVOICE_ISSUED && $object instanceof Invoice) {
+    echo $object->metadata['pedido'] ?? '', ' ', $object->number, ' ', $object->cae, "\n";
+} elseif ($object instanceof Invoice && $object->failure_reason !== null) {
+    echo 'No se emitió: ', $object->failure_reason->code, "\n"; // invoice.rejected o .failed
+}
+```
+
+`$client->invoices` existe desde la 1.4.0. La referencia completa del Facturador está en https://raya.cash/api/invoices.
+
 ## Sandbox
 
 Un sandbox es una cuenta aparte de tu cuenta real, solo para probar: cobrás con la misma API y el mismo SDK, simulás la transferencia de quien paga y te llegan los webhooks, sin mover plata. Si en el menú de tu perfil del dashboard aparece «Crear sandbox» o «Sandboxes», tu cuenta lo tiene: creá uno desde ahí (hasta 5 por cuenta). Si no aparece, tu cuenta todavía no lo tiene.
@@ -924,7 +1013,7 @@ $balance = $client->balance->retrieve(); // tu saldo de prueba: sube al simular
 - **El saldo y los reembolsos:** `$client->balance->retrieve()` da tu saldo de prueba, que sube al simular, en el acto, por lo recibido. `payments->refund()` devuelve todo al instante, sin pasar por el banco ni mirar el saldo, hasta 30 días después de `paid_at`, y te llega `payment.refunded`.
 - **Los webhooks:** cada sandbox tiene sus propios destinos (hasta 3, en Developers › Webhooks del sandbox), con 3 intentos por entrega, y solo emite `payment.*`, `connect.order.*` y el `webhook.test` de «Enviar evento de prueba». Sus eventos traen `$event->livemode` en `false`; los de tu cuenta real, en `true`. La firma se verifica igual, con el secreto (`whsec_…`) de ese destino. Creá el destino antes de simular: cada destino recibe solo los eventos que ocurren después de crearlo, así que los de un pago que simulaste antes no le llegan ni se pueden reenviar. Para probar en tu máquina sin publicar una URL, usá rayacash-cli (necesita Node.js 22 o más nuevo): copiá a `RAYA_WEBHOOK_SECRET` el secreto de tu máquina que muestra `npx rayacash-cli listen --print-secret` y abrí la escucha con `npx rayacash-cli listen --forward-to localhost:8000/webhooks/raya` (toma la clave secreta de prueba de la variable `RAYA_SECRET_KEY` de esa terminal, no de tu `.env`, o de `npx rayacash-cli login`): le reenvía a tu servidor los eventos del sandbox que ocurren con la escucha abierta, firmados con ese secreto.
 - **Los límites:** el sandbox tiene sus propios límites de requests y un tope diario de pagos de prueba. Pasados, la API responde 429 `RATE_LIMITED` con `Retry-After`, como en tu cuenta real.
-- **Lo que todavía no está disponible en el sandbox:** las transferencias (`transfers`), los payouts (`connect->payouts`), Identidad y Raya PSP (`psp`): con una clave de prueba responden 403 `SANDBOX_NOT_SUPPORTED`. Raya.js todavía no acepta la clave pública de prueba.
+- **Lo que todavía no está disponible en el sandbox:** las transferencias (`transfers`), los payouts (`connect->payouts`), Identidad, Raya PSP (`psp`) y el Facturador (`invoices`, que emite facturas reales ante ARCA): con una clave de prueba responden 403 `SANDBOX_NOT_SUPPORTED`. Raya.js todavía no acepta la clave pública de prueba.
 - **Al pasar a tu cuenta real:** cambiá la clave por la real (`raya_sk_live_…`, que creás con verificación facial o desde tu teléfono), sacá `testHelpers`, configurá tu negocio en Configuración › Negocio y volvé a crear tus destinos de webhooks (en `RAYA_WEBHOOK_SECRET`, el secreto del destino de tu cuenta real) y tus apps: lo del sandbox no pasa a tu cuenta real. Ahí cada pago `pending` tiene su propio CVU y su alias, un pago de menos se devuelve solo (queda `refunded`), lo cobrado se suma a tu saldo cuando se liquida y un reembolso puede fallar por saldo (`INSUFFICIENT_BALANCE`).
 
 ### Raya Connect con usuarios de prueba
@@ -1011,7 +1100,7 @@ $client = new RayaClient([
 ```
 
 - **Proxies y certificados:** pasá un `CurlClient` con opciones de curl (`CURLOPT_PROXY`, `CURLOPT_CAINFO`…). Las que maneja el SDK (URL, método, headers, body, timeouts y redirects) no se aceptan, y apagar la verificación TLS o `CURLOPT_VERBOSE` (escribe el header `Authorization`, con la clave entera) tampoco: para ver las requests, usá `RAYA_LOG=debug`, y para un problema de conexión, `curl -v https://api.raya.cash` en la terminal. Tus opciones pueden llevar la contraseña del proxy: no aparecen en `var_dump()` ni (desde PHP 8.2) en las trazas, y un `CurlClient` no se serializa. libcurl también respeta `https_proxy`. En Windows, si ves `curl 60` o `curl 77`, falta el certificado de CA: configurá `curl.cainfo` en tu `php.ini` o pasá `CURLOPT_CAINFO`. Para usar otra librería HTTP, implementá `HttpClientInterface`.
-- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.3.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
+- **`app_info`:** identifica tu plugin en el `User-Agent` (`rayacash-php/1.4.0 … mi-plugin/1.2.0`), que ves en [Developers › Logs](https://raya.cash/dashboard/developers/logs). En el estilo global: `RayaCash::setAppInfo('mi-plugin', version: '1.2.0')`.
 - **Logging:** con `RAYA_LOG=info` (o `RayaCash::setLog('info')`) ves cada request, su status, su `request_id` y los reintentos en STDERR (en la consola) o en el `error_log()` de PHP (en FPM o Apache); con `debug`, también la query y la idempotency key. Con `RayaCash::setLogger($logger)`, un logger PSR-3 (Monolog, el de Laravel, el de Symfony) recibe cada línea, aunque no haya `RAYA_LOG`. Nunca logueamos la clave ni los bodies.
 - **Cerrar:** `$client->close()` suelta la conexión, para workers largos (Octane, un consumidor de colas). Se puede llamar más de una vez y el cliente sigue usable: la próxima request abre otra. El `http_client` que pasaste no se toca.
 - **Endpoints nuevos:** si la API suma un endpoint antes que el SDK, usá `$client->rawRequest('get', '/v1/…', params: […])` o `$client->rawRequest('post', '/v1/…', body: […])`: tiene la misma autenticación, reintentos y errores.
@@ -1026,13 +1115,14 @@ $client = new RayaClient([
 - **En una app:** el `client_secret` y los `access_token` de las cuentas conectadas son secretos como la clave: guardalos solo en tu servidor. Si el `client_secret` se filtró, regeneralo en Developers › Apps (el anterior deja de valer); si se filtró un `access_token`, la cuenta puede desconectar tu app desde Configuración › Apps externas o volver a autorizarla (el token anterior muere). El SDK enmascara los `access_token` como a la clave, pero el `client_secret` viaja en el body de `oauth->token`: con las trazas con argumentos (`zend.exception_ignore_args = Off`, el valor de desarrollo), la traza de un error de la API en esa llamada incluye la request con su body; con el valor de producción (`On`), no.
 - **En Identidad,** `person` y las imágenes son datos personales de quien se verifica: usalos solo para lo que esa persona aceptó, guardá lo mínimo y no los escribas en logs (`print_r($verification)` los muestra). Los eventos nunca traen `person`. En el navegador va Identity.js, que no usa ninguna clave: solo el `id` de la verificación, que conviene darle solo a la persona que se tiene que verificar.
 - **En Raya PSP,** el CUIL o CUIT, el nombre y las fotos del DNI y la selfie de tus clientes son datos personales: no los pongas en `external_reference` ni en `metadata` (`external_reference` viaja en la URL al filtrar la lista) y no los escribas en logs (`print_r($pspCustomer)` los muestra).
+- **En el Facturador,** el certificado y la clave privada de ARCA se cargan solo en el dashboard (Negocios › Facturador): nunca pasan por la API ni por el SDK. El DNI de quien te compró es un dato personal: no lo pongas en `metadata` y no lo escribas en logs (`print_r($invoice)` lo muestra).
 - Las requests que hacés con la clave secreta quedan 30 días en [Developers › Logs](https://raya.cash/dashboard/developers/logs).
 
 ## Versionado y compatibilidad
 
 - [Semver](https://semver.org/lang/es/): los cambios incompatibles solo llegan en una versión mayor (`2.0.0`). Las menores (`1.1.0`) suman cosas sin romper nada y las de parche (`1.0.1`) corrigen errores. Todo queda anotado en el [CHANGELOG](CHANGELOG.md).
 - La API puede sumar campos, valores de enums, eventos, códigos de error y endpoints. El SDK los deja pasar: tu código tiene que ignorar lo que no conoce.
-- PHP 8.1 a 8.5. Cada objeto declara sus campos (`@property-read`) y cada método, la forma de sus arrays: tu IDE y PHPStan conocen los campos (los estados son uniones de literales, como `'pending'|'succeeded'|…`, y pueden sumarse valores) y PHPStan avisa si `transfers->create` o `psp->transfers->create` van sin `idempotency_key`, o si los parámetros de `psp->customers->create` no son una de sus tres formas: para tipar los tuyos, importá `PspCustomerCreateParams` de `RayaCash\Service\PspCustomerService` con `@phpstan-import-type`.
+- PHP 8.1 a 8.5. Cada objeto declara sus campos (`@property-read`) y cada método, la forma de sus arrays: tu IDE y PHPStan conocen los campos (los estados son uniones de literales, como `'pending'|'succeeded'|…`, y pueden sumarse valores) y PHPStan avisa si `transfers->create`, `psp->transfers->create` o `invoices->create` van sin `idempotency_key`, o si los parámetros de `psp->customers->create` no son una de sus tres formas: para tipar los tuyos, importá `PspCustomerCreateParams` de `RayaCash\Service\PspCustomerService` con `@phpstan-import-type`.
 
 ## Desarrollo
 

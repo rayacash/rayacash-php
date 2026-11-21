@@ -778,6 +778,156 @@ final class Fixtures
         'data' => ['object' => self::PSP_DOCUMENT_REQUEST],
     ];
 
+    // --- Facturador (api.md › Facturador) ---------------------------------------------------
+
+    // Los de los ejemplos de raya.cash/api/invoices: el DNI 12345678, 15000 pesos, el punto de
+    // venta 5, una Factura B y el CAE 76543210987654. En una B el IVA va incluido: el neto es
+    // 15000 / 1.21 redondeado a 2 decimales (12396.69) y el IVA, el resto (2603.31), así la suma
+    // es exacta. Los códigos y los textos de ARCA llegan tal cual: el SDK no los mira.
+    public const INVOICE_ID = 'inv_6Rt2Kw9Np4Xc1Lm8Vb3Qz7Hd';
+    public const INVOICE_REJECTED_ID = 'inv_9Mx4Ld7Qa2Vs6Ce1Jb8Tn5Wk';
+    public const INVOICE_C_ID = 'inv_2Bq8Zt5Hm1Wx7Kd4Nc9Pr3Lf';
+    public const INVOICE_DNI = '12345678';
+    public const INVOICE_CAE = '76543210987654';
+
+    // La respuesta de crear una factura: 202, pending, todavía sin número ni CAE.
+    public const INVOICE_PENDING = [
+        'id' => self::INVOICE_ID,
+        'object' => 'invoice',
+        'type' => 'B',
+        'status' => 'pending',
+        'amount' => 15000,
+        'net_amount' => 12396.69,
+        'vat_amount' => 2603.31,
+        'currency' => 'ARS',
+        'dni' => self::INVOICE_DNI,
+        'point_of_sale' => 5,
+        'number' => null,
+        'concept' => 'products',
+        'cae' => null,
+        'cae_expires_on' => null,
+        'issued_on' => null,
+        'failure_reason' => null,
+        'arca_messages' => [],
+        'metadata' => ['pedido' => '1042'],
+        'issued_at' => null,
+        'created_at' => '2026-11-18T15:12:38Z',
+    ];
+
+    // La misma, emitida: su número, su CAE (vence a los 10 días) y la fecha del comprobante.
+    public const INVOICE_ISSUED = [
+        ...self::INVOICE_PENDING,
+        'status' => 'issued',
+        'number' => 128,
+        'cae' => self::INVOICE_CAE,
+        'cae_expires_on' => '2026-11-28',
+        'issued_on' => '2026-11-18',
+        'issued_at' => '2026-11-18T15:12:41Z',
+    ];
+
+    // Una Factura C (Monotributo), de servicios: sin IVA, así que el neto es el total y
+    // vat_amount viene en null.
+    public const INVOICE_C_ISSUED = [
+        ...self::INVOICE_ISSUED,
+        'id' => self::INVOICE_C_ID,
+        'type' => 'C',
+        'net_amount' => 15000,
+        'vat_amount' => null,
+        'number' => 87,
+        'concept' => 'services',
+        'cae' => '76543210987655',
+        'metadata' => ['pedido' => '1043'],
+    ];
+
+    // Rechazada por ARCA, con la observación que lo explica (un ejemplo: los códigos y los textos
+    // son los de ARCA).
+    public const INVOICE_REJECTED = [
+        ...self::INVOICE_PENDING,
+        'id' => self::INVOICE_REJECTED_ID,
+        'status' => 'rejected',
+        'failure_reason' => [
+            'code' => 'arca_rejected',
+            'message' => 'ARCA rechazó la factura: arca_messages dice por qué.',
+        ],
+        'arca_messages' => [
+            [
+                'type' => 'observation',
+                'code' => 10015,
+                'message' => 'El campo DocNro no corresponde a un documento valido para el '
+                    . 'DocTipo informado.',
+            ],
+        ],
+        'metadata' => ['pedido' => '1044'],
+        'created_at' => '2026-11-18T15:20:02Z',
+    ];
+
+    // No la pudimos emitir y no quedó registrada en ARCA: tu Facturador dejó de estar listo.
+    public const INVOICE_FAILED = [
+        ...self::INVOICE_PENDING,
+        'status' => 'failed',
+        'failure_reason' => [
+            'code' => 'facturador_not_ready',
+            'message' => 'Tu Facturador no estaba listo para emitirla. Revisalo en Negocios › '
+                . 'Facturador y creá la factura de nuevo.',
+        ],
+    ];
+
+    // Otro sistema emitió con el mismo punto de venta: ARCA contestó que ese número no era el
+    // próximo (10016).
+    public const INVOICE_FAILED_NUMBERING = [
+        ...self::INVOICE_FAILED,
+        'failure_reason' => [
+            'code' => 'numbering_conflict',
+            'message' => 'Otro sistema emitió comprobantes con el mismo punto de venta. Usá un '
+                . 'punto de venta solo para Raya y creá la factura de nuevo.',
+        ],
+        'arca_messages' => [
+            [
+                'type' => 'observation',
+                'code' => 10016,
+                'message' => 'El numero o fecha del comprobante no se corresponde con el proximo a '
+                    . 'autorizar. Consultar metodo FECompUltimoAutorizado.',
+            ],
+        ],
+    ];
+
+    public const INVOICE_LIST = [
+        'object' => 'list',
+        'data' => [self::INVOICE_REJECTED, self::INVOICE_ISSUED],
+        'has_more' => false,
+        'next_cursor' => null,
+    ];
+
+    public const EVENT_INVOICE_ISSUED = [
+        'id' => 'evt_7Gk3Xn9Pw2Rc5Tm8Vd1Lq4Zb',
+        'object' => 'event',
+        'type' => 'invoice.issued',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-11-18T15:12:41Z',
+        'livemode' => true,
+        'data' => ['object' => self::INVOICE_ISSUED],
+    ];
+
+    public const EVENT_INVOICE_REJECTED = [
+        'id' => 'evt_4Hp8Yb2Ks6Nf9Rw3Tc7Mj1Qx',
+        'object' => 'event',
+        'type' => 'invoice.rejected',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-11-18T15:20:05Z',
+        'livemode' => true,
+        'data' => ['object' => self::INVOICE_REJECTED],
+    ];
+
+    public const EVENT_INVOICE_FAILED = [
+        'id' => 'evt_1Dz5Vq8Lg3Xw7Bn2Kp6Hs9Rc',
+        'object' => 'event',
+        'type' => 'invoice.failed',
+        'api_version' => '2026-10-23',
+        'created_at' => '2026-11-18T15:31:12Z',
+        'livemode' => true,
+        'data' => ['object' => self::INVOICE_FAILED],
+    ];
+
     // --- Sandbox (api.md › Sandbox) ---------------------------------------------------------
 
     // Los de tests/fixtures_sandbox.py de rayacash-python: la forma de las respuestas reales de
@@ -989,6 +1139,30 @@ final class Fixtures
             'object' => 'list',
             'data' => array_map(
                 static fn(string $id): array => [...self::PSP_TRANSFER_INBOUND, 'id' => $id],
+                $ids,
+            ),
+            'has_more' => $nextCursor !== null,
+            'next_cursor' => $nextCursor,
+        ];
+    }
+
+    /**
+     * Una página de facturas (copias de INVOICE_ISSUED con esos ids).
+     *
+     * @param list<string> $ids
+     * @return array{
+     *     object: 'list',
+     *     data: list<array<string, mixed>>,
+     *     has_more: bool,
+     *     next_cursor: string|null,
+     * }
+     */
+    public static function invoicePage(array $ids, ?string $nextCursor): array
+    {
+        return [
+            'object' => 'list',
+            'data' => array_map(
+                static fn(string $id): array => [...self::INVOICE_ISSUED, 'id' => $id],
                 $ids,
             ),
             'has_more' => $nextCursor !== null,

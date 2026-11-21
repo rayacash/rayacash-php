@@ -26,6 +26,7 @@ use RayaCash\HttpClient\HttpClientInterface;
 use RayaCash\HttpClient\Request;
 use RayaCash\HttpClient\Response;
 use RayaCash\IdentityVerification;
+use RayaCash\Invoice;
 use RayaCash\OAuth;
 use RayaCash\Payment;
 use RayaCash\PspBalance;
@@ -411,6 +412,82 @@ function rayaPsp(RayaClient $client, \Stringable $decimal): void
     }
 }
 
+/** El Facturador: facturas electrónicas de ARCA, con tu clave secreta. */
+function invoices(RayaClient $client, \Stringable $decimal): void
+{
+    assertType('RayaCash\Service\InvoiceService', $client->invoices);
+    $invoice = $client->invoices->create(
+        ['dni' => '12345678', 'amount' => $decimal, 'metadata' => ['pedido' => '1042']],
+        ['idempotency_key' => 'k'],
+    );
+    assertType('RayaCash\Invoice', $invoice);
+    assertType('RayaCash\RayaResponse|null', $invoice->getLastResponse());
+    assertType("'invoice'", $invoice->object);
+    assertType("'invoice'", Invoice::OBJECT_NAME);
+    assertType("'B'|'C'", $invoice->type);
+    assertType("'C'", Invoice::TYPE_C);
+    assertType("'failed'|'issued'|'pending'|'rejected'", $invoice->status);
+    assertType("'issued'", Invoice::STATUS_ISSUED);
+    assertType('float|int', $invoice->amount);
+    assertType('float|int', $invoice->net_amount);
+    assertType('float|int|null', $invoice->vat_amount);
+    assertType('string', $invoice->currency);
+    assertType('string', $invoice->dni);
+    assertType('int', $invoice->point_of_sale);
+    assertType('int|null', $invoice->number);
+    assertType("'products'|'products_and_services'|'services'", $invoice->concept);
+    assertType("'products_and_services'", Invoice::CONCEPT_PRODUCTS_AND_SERVICES);
+    assertType('string|null', $invoice->cae);
+    assertType('string|null', $invoice->cae_expires_on);
+    assertType('string|null', $invoice->issued_on);
+    assertType('RayaCash\Invoice\FailureReason|null', $invoice->failure_reason);
+    assertType(
+        "'account_unavailable'|'arca_rejected'|'facturador_not_ready'|'not_issued'"
+        . "|'numbering_conflict'|null",
+        $invoice->failure_reason?->code,
+    );
+    assertType("'numbering_conflict'", Invoice::FAILURE_CODE_NUMBERING_CONFLICT);
+    assertType('string|null', $invoice->failure_reason?->message);
+    assertType('list<RayaCash\Invoice\ArcaMessage>', $invoice->arca_messages);
+    foreach ($invoice->arca_messages as $message) {
+        assertType("'error'|'observation'", $message->type);
+        assertType('int', $message->code);
+        assertType('string', $message->message);
+    }
+    assertType("'observation'", Invoice\ArcaMessage::TYPE_OBSERVATION);
+    assertType('array<string>', $invoice->metadata);
+    assertType('string|null', $invoice->issued_at);
+    assertType('string', $invoice->created_at);
+    // La metadata como stdClass, el monto en texto y otras opciones de la llamada.
+    assertType(
+        'RayaCash\Invoice',
+        $client->invoices->create(
+            ['dni' => '12345678', 'amount' => '15000.50', 'metadata' => (object) ['a' => 'b']],
+            ['idempotency_key' => 'k', 'timeout' => 90, 'max_network_retries' => 0],
+        ),
+    );
+    assertType('RayaCash\Invoice', $client->invoices->retrieve('inv_x'));
+    $page = $client->invoices->list([
+        'status' => 'issued',
+        'created_gte' => new \DateTimeImmutable(),
+        'created_lt' => '2026-12-01T00:00:00-03:00',
+        'limit' => 100,
+        'cursor' => 'c',
+    ]);
+    assertType('RayaCash\ListObject<RayaCash\Invoice>', $page);
+    assertType('list<RayaCash\Invoice>', $page->data);
+    foreach ($page->autoPagingIter() as $item) {
+        assertType('RayaCash\Invoice', $item);
+    }
+
+    // En los webhooks, el objeto sale con instanceof.
+    $object = $client->constructEvent('{}', 't=1,v1=x', 'whsec_x')->data->object;
+    if ($object instanceof Invoice) {
+        assertType('RayaCash\Invoice', $object);
+        assertType('int|null', $object->number);
+    }
+}
+
 /**
  * Un sandbox, con su clave secreta de prueba: el test helper devuelve un Payment o un
  * ConnectOrder (según el id), y los eventos traen livemode.
@@ -618,6 +695,13 @@ function globalStyle(): void
     assertType('RayaCash\PspTransfer', PspTransfer::retrieve('id'));
     assertType('RayaCash\ListObject<RayaCash\PspTransfer>', PspTransfer::list());
     assertType('RayaCash\PspBalance', PspBalance::retrieve());
+    // El Facturador, con la clave secreta global: la clave de idempotencia, obligatoria.
+    assertType(
+        'RayaCash\Invoice',
+        Invoice::create(['dni' => '12345678', 'amount' => 15000], ['idempotency_key' => 'k']),
+    );
+    assertType('RayaCash\Invoice', Invoice::retrieve('id'));
+    assertType('RayaCash\ListObject<RayaCash\Invoice>', Invoice::list(['status' => 'issued']));
 }
 
 /**
@@ -805,7 +889,8 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
         . "|'connect.order.created'|'connect.order.failed'|'connect.order.refunded'"
         . "|'connect.order.succeeded'|'identity.verification.canceled'"
         . "|'identity.verification.declined'|'identity.verification.expired'"
-        . "|'identity.verification.verified'|'payment.created'|'payment.failed'"
+        . "|'identity.verification.verified'|'invoice.failed'|'invoice.issued'"
+        . "|'invoice.rejected'|'payment.created'|'payment.failed'"
         . "|'payment.refunded'|'payment.succeeded'|'psp.customer.activated'"
         . "|'psp.customer.blocked'|'psp.customer.closed'|'psp.customer.failed'"
         . "|'psp.customer.rejected'|'psp.customer.unblocked'|'psp.customer.updated'"
@@ -825,6 +910,9 @@ function objects(Payment $payment, Transfer $transfer, Event $event, Balance $ba
         "'psp.document_request.closed'",
         Event::TYPE_PSP_DOCUMENT_REQUEST_CLOSED,
     );
+    assertType("'invoice.issued'", Event::TYPE_INVOICE_ISSUED);
+    assertType("'invoice.rejected'", Event::TYPE_INVOICE_REJECTED);
+    assertType("'invoice.failed'", Event::TYPE_INVOICE_FAILED);
     assertType('string', $balance->currency);
     // Lo que no tiene tipo en la doc, por nombre: mixed (un campo nuevo de la API, por ejemplo).
     assertType('mixed', $payment['campo_nuevo']);

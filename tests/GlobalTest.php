@@ -14,6 +14,7 @@ use RayaCash\HttpClient\HttpClientInterface;
 use RayaCash\IdentityVerification;
 use RayaCash\IdentityVerificationFiles;
 use RayaCash\Internal\Transport;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuth;
 use RayaCash\OAuthToken;
@@ -511,6 +512,56 @@ final class GlobalTest extends TestCase
         );
         self::assertSame('b-3', $this->api->last()->header('idempotency-key'));
         self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+    }
+
+    /**
+     * El Facturador con el estilo global y la clave secreta: Invoice::create() (con la clave de
+     * idempotencia obligatoria, que también se pide antes de mandar nada), retrieve() y list().
+     */
+    public function testInvoiceEndpointsWithTheGlobalStyle(): void
+    {
+        $api = $this->globalApi();
+        $api->add(202, Fixtures::INVOICE_PENDING);
+        $invoice = Invoice::create(
+            ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000, 'metadata' => ['pedido' => '1042']],
+            ['idempotency_key' => 'venta-1042'],
+        );
+        self::assertSame(Invoice::class, $invoice::class);
+        self::assertSame(Invoice::STATUS_PENDING, $invoice->status);
+        self::assertSame(
+            ['dni' => '12345678', 'amount' => 15000, 'metadata' => ['pedido' => '1042']],
+            $api->lastJson(),
+        );
+        self::assertSame(['POST', '/v1/invoices'], [$api->last()->method, $api->last()->path]);
+        self::assertSame('venta-1042', $api->last()->header('idempotency-key'));
+        self::assertSame('Bearer ' . Fixtures::TEST_KEY, $this->lastAuthorization());
+
+        $api->add(200, Fixtures::INVOICE_ISSUED);
+        $issued = Invoice::retrieve(Fixtures::INVOICE_ID);
+        self::assertSame(
+            [Invoice::STATUS_ISSUED, Fixtures::INVOICE_CAE],
+            [$issued->status, $issued->cae],
+        );
+        self::assertSame('/v1/invoices/' . Fixtures::INVOICE_ID, $api->last()->path);
+
+        $api->add(200, Fixtures::INVOICE_LIST);
+        $page = Invoice::list(['status' => 'issued', 'limit' => 2]);
+        self::assertSame(ListObject::class, $page::class);
+        self::assertSame(Invoice::class, $page->data[0]::class);
+        self::assertSame(['status' => 'issued', 'limit' => '2'], $api->last()->query);
+
+        // Con la clave de otra cuenta, por llamada.
+        $api->add(200, Fixtures::INVOICE_ISSUED);
+        Invoice::retrieve(Fixtures::INVOICE_ID, ['api_key' => Fixtures::OTHER_KEY]);
+        self::assertSame('Bearer ' . Fixtures::OTHER_KEY, $this->lastAuthorization());
+
+        self::assertThrows(
+            \TypeError::class,
+            // @phpstan-ignore argument.type (lo que haría alguien sin PHPStan)
+            static fn() => Invoice::create(['dni' => Fixtures::INVOICE_DNI, 'amount' => 1], []),
+            'invoices->create necesita idempotency_key',
+        );
+        self::assertCount(4, $api->requests);
     }
 
     public function testInstanceRefund(): void
@@ -1153,6 +1204,25 @@ final class GlobalTest extends TestCase
             static fn(): mixed => PspBalance::retrieve([], $options),
             'PspBalance::retrieve recibe 1 argumento (options), no 2: las opciones van en el '
                 . "primero, como ['api_key' => …].",
+        ];
+        yield 'Invoice::create' => [
+            static fn(): mixed => Invoice::create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                $key,
+                $options,
+            ),
+            'Invoice::create recibe 2 argumentos (params y options), no 3: las opciones van en el '
+                . "segundo, como ['api_key' => …].",
+        ];
+        yield 'Invoice::retrieve' => [
+            static fn(): mixed => Invoice::retrieve('inv_x', [], $options),
+            'Invoice::retrieve recibe 2 argumentos (invoiceId y options), no 3: las opciones van '
+                . "en el segundo, como ['api_key' => …].",
+        ];
+        yield 'Invoice::list' => [
+            static fn(): mixed => Invoice::list([], [], $options),
+            'Invoice::list recibe 2 argumentos (params y options), no 3: las opciones van en el '
+                . "segundo, como ['api_key' => …].",
         ];
     }
 

@@ -13,6 +13,7 @@ use RayaCash\IdentityVerification;
 use RayaCash\IdentityVerificationFiles;
 use RayaCash\Internal\Hydrator;
 use RayaCash\Internal\ObjectToken;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -573,6 +574,180 @@ final class ObjectsTest extends TestCase
         );
     }
 
+    /**
+     * Una factura del Facturador: sus 20 campos en el orden de la API, el motivo y los mensajes
+     * de ARCA con su clase (una lista), la metadata plana y vat_amount en null en una Factura C.
+     */
+    public function testInvoiceNestedObjects(): void
+    {
+        $issued = self::convertAs(Invoice::class, Fixtures::INVOICE_ISSUED);
+        self::assertSame(Fixtures::INVOICE_ID, $issued->id);
+        self::assertSame(
+            [
+                'id',
+                'object',
+                'type',
+                'status',
+                'amount',
+                'net_amount',
+                'vat_amount',
+                'currency',
+                'dni',
+                'point_of_sale',
+                'number',
+                'concept',
+                'cae',
+                'cae_expires_on',
+                'issued_on',
+                'failure_reason',
+                'arca_messages',
+                'metadata',
+                'issued_at',
+                'created_at',
+            ],
+            array_keys($issued->toArray()),
+        );
+        self::assertSame(
+            [15000, 12396.69, 2603.31, 'ARS'],
+            [$issued->amount, $issued->net_amount, $issued->vat_amount, $issued->currency],
+        );
+        // net_amount + vat_amount es amount, al centavo.
+        $net = (int) round($issued->net_amount * 100);
+        $vat = (int) round(($issued->vat_amount ?? 0) * 100);
+        self::assertSame(1500000, $net + $vat);
+        self::assertSame(
+            ['12345678', 5, 128],
+            [$issued->dni, $issued->point_of_sale, $issued->number],
+        );
+        self::assertSame(['pedido' => '1042'], $issued->metadata); // un array común
+        self::assertNull($issued->failure_reason);
+        self::assertSame([], $issued->arca_messages);
+        // El JSON exacto de la API, ida y vuelta.
+        self::assertSame(Fixtures::INVOICE_ISSUED, self::jsonRoundTrip($issued));
+        self::assertSame(Fixtures::INVOICE_ISSUED, $issued->toArray());
+        self::assertSame(
+            json_encode(Fixtures::INVOICE_ISSUED, JSON_THROW_ON_ERROR),
+            json_encode($issued, JSON_THROW_ON_ERROR),
+        );
+
+        $rejected = self::convertAs(Invoice::class, Fixtures::INVOICE_REJECTED);
+        self::assertSame(Invoice\FailureReason::class, get_debug_type($rejected->failure_reason));
+        self::assertSame(
+            [
+                Invoice::FAILURE_CODE_ARCA_REJECTED,
+                'ARCA rechazó la factura: arca_messages dice por qué.',
+            ],
+            [$rejected->failure_reason?->code, $rejected->failure_reason?->message],
+        );
+        self::assertSame(
+            [Invoice\ArcaMessage::class],
+            array_map(
+                static fn(mixed $message): string => get_debug_type($message),
+                $rejected->arca_messages,
+            ),
+        );
+        self::assertSame(
+            [Invoice\ArcaMessage::TYPE_OBSERVATION, 10015],
+            [$rejected->arca_messages[0]->type, $rejected->arca_messages[0]->code],
+        );
+        self::assertSame(Fixtures::INVOICE_REJECTED, $rejected->toArray());
+        self::assertSame(Fixtures::INVOICE_REJECTED, self::jsonRoundTrip($rejected));
+
+        $factC = self::convertAs(Invoice::class, Fixtures::INVOICE_C_ISSUED);
+        self::assertSame(
+            [Invoice::TYPE_C, 15000, null, Invoice::CONCEPT_SERVICES],
+            [$factC->type, $factC->net_amount, $factC->vat_amount, $factC->concept],
+        );
+        self::assertSame(Fixtures::INVOICE_C_ISSUED, $factC->toArray());
+
+        $failed = self::convertAs(Invoice::class, Fixtures::INVOICE_FAILED_NUMBERING);
+        self::assertSame(
+            [Invoice::STATUS_FAILED, Invoice::FAILURE_CODE_NUMBERING_CONFLICT, null],
+            [$failed->status, $failed->failure_reason?->code, $failed->number],
+        );
+        self::assertSame(10016, $failed->arca_messages[0]->code);
+
+        $pending = self::convertAs(Invoice::class, Fixtures::INVOICE_PENDING);
+        self::assertSame(
+            [Invoice::STATUS_PENDING, null, null, null, null, null],
+            [
+                $pending->status,
+                $pending->number,
+                $pending->cae,
+                $pending->cae_expires_on,
+                $pending->issued_on,
+                $pending->issued_at,
+            ],
+        );
+        // Los DNI de los ejemplos son los que acepta la API: sin puntos ni ceros adelante.
+        $examples = [
+            Fixtures::INVOICE_PENDING,
+            Fixtures::INVOICE_REJECTED,
+            Fixtures::INVOICE_C_ISSUED,
+        ];
+        foreach ($examples as $values) {
+            self::assertMatchesRegularExpression('/\A[1-9][0-9]{5,7}\z/', $values['dni']);
+        }
+    }
+
+    /**
+     * Las constantes de la factura y de sus mensajes de ARCA, y "invoice" registrado: también
+     * anidado en un objeto sin clase propia.
+     */
+    public function testInvoiceConstantsAndObjectName(): void
+    {
+        self::assertSame('invoice', Invoice::OBJECT_NAME);
+        self::assertSame(['B', 'C'], [Invoice::TYPE_B, Invoice::TYPE_C]);
+        self::assertSame(
+            ['pending', 'issued', 'rejected', 'failed'],
+            [
+                Invoice::STATUS_PENDING,
+                Invoice::STATUS_ISSUED,
+                Invoice::STATUS_REJECTED,
+                Invoice::STATUS_FAILED,
+            ],
+        );
+        self::assertSame(
+            ['products', 'services', 'products_and_services'],
+            [
+                Invoice::CONCEPT_PRODUCTS,
+                Invoice::CONCEPT_SERVICES,
+                Invoice::CONCEPT_PRODUCTS_AND_SERVICES,
+            ],
+        );
+        self::assertSame(
+            [
+                'arca_rejected',
+                'facturador_not_ready',
+                'not_issued',
+                'numbering_conflict',
+                'account_unavailable',
+            ],
+            [
+                Invoice::FAILURE_CODE_ARCA_REJECTED,
+                Invoice::FAILURE_CODE_FACTURADOR_NOT_READY,
+                Invoice::FAILURE_CODE_NOT_ISSUED,
+                Invoice::FAILURE_CODE_NUMBERING_CONFLICT,
+                Invoice::FAILURE_CODE_ACCOUNT_UNAVAILABLE,
+            ],
+        );
+        // Ni uno más: los 5 códigos públicos de failure_reason.
+        $names = array_keys((new \ReflectionClass(Invoice::class))->getConstants());
+        self::assertCount(5, preg_grep('/\AFAILURE_CODE_/', $names) ?: []);
+        self::assertSame(
+            ['error', 'observation'],
+            [Invoice\ArcaMessage::TYPE_ERROR, Invoice\ArcaMessage::TYPE_OBSERVATION],
+        );
+        $nested = RayaObject::constructFrom([
+            'invoice' => Fixtures::INVOICE_ISSUED,
+            'other' => [...Fixtures::INVOICE_ISSUED, 'object' => 'invoice.v2'],
+        ]);
+        self::assertSame(
+            [Invoice::class, RayaObject::class],
+            [get_debug_type($nested['invoice']), get_debug_type($nested['other'])],
+        );
+    }
+
     public function testUserNestedObjects(): void
     {
         $user = self::convertAs(User::class, Fixtures::USER);
@@ -733,6 +908,34 @@ final class ObjectsTest extends TestCase
         self::assertSame(PspDocumentRequest::class, get_debug_type($request));
         self::assertInstanceOf(PspDocumentRequest::class, $request);
         self::assertSame(Fixtures::PSP_CUSTOMER_ID, $request->customer);
+    }
+
+    /** Los invoice.* traen la Invoice, con su motivo y sus mensajes de ARCA con su clase. */
+    public function testEventHydratesAnInvoice(): void
+    {
+        $issued = Event::constructFrom(Fixtures::EVENT_INVOICE_ISSUED);
+        self::assertSame(Event::TYPE_INVOICE_ISSUED, $issued->type);
+        $invoice = $issued->data->object;
+        self::assertSame(Invoice::class, get_debug_type($invoice));
+        self::assertInstanceOf(Invoice::class, $invoice);
+        self::assertSame([Fixtures::INVOICE_CAE, 128], [$invoice->cae, $invoice->number]);
+        self::assertTrue($issued->livemode);
+
+        $rejected = Event::constructFrom(Fixtures::EVENT_INVOICE_REJECTED);
+        self::assertSame('invoice.rejected', $rejected->type);
+        $invoice = $rejected->data->object;
+        self::assertInstanceOf(Invoice::class, $invoice);
+        self::assertSame(Invoice\FailureReason::class, get_debug_type($invoice->failure_reason));
+        self::assertSame(Invoice\ArcaMessage::class, get_debug_type($invoice->arca_messages[0]));
+
+        $failed = Event::constructFrom(Fixtures::EVENT_INVOICE_FAILED);
+        self::assertSame(Event::TYPE_INVOICE_FAILED, $failed->type);
+        $invoice = $failed->data->object;
+        self::assertInstanceOf(Invoice::class, $invoice);
+        self::assertSame(
+            [Invoice::STATUS_FAILED, Invoice::FAILURE_CODE_FACTURADOR_NOT_READY],
+            [$invoice->status, $invoice->failure_reason?->code],
+        );
     }
 
     public function testMetadataKeysCanShadowDictMethods(): void

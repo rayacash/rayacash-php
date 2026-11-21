@@ -10,6 +10,7 @@ use RayaCash\Event\Data;
 use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\IdentityVerification;
 use RayaCash\Internal\Timing;
+use RayaCash\Invoice;
 use RayaCash\Payment;
 use RayaCash\PspCustomer;
 use RayaCash\PspDocumentRequest;
@@ -524,6 +525,59 @@ final class WebhooksTest extends TestCase
                 Event::TYPE_PSP_DOCUMENT_REQUEST_CREATED,
                 Event::TYPE_PSP_DOCUMENT_REQUEST_CLOSED,
             ],
+        );
+    }
+
+    /**
+     * Los invoice.* del Facturador: la Invoice, con su clase, y los 3 tipos con su constante,
+     * declarados antes de los psp.* (el orden del catálogo de eventos de la API).
+     */
+    public function testConstructEventWithAnInvoice(): void
+    {
+        $cases = [
+            Fixtures::EVENT_INVOICE_ISSUED,
+            Fixtures::EVENT_INVOICE_REJECTED,
+            Fixtures::EVENT_INVOICE_FAILED,
+        ];
+        foreach ($cases as $values) {
+            $body = json_encode($values, JSON_THROW_ON_ERROR);
+            $event = Webhook::constructEvent(
+                $body,
+                WebhookSignature::generateHeader($body, self::SECRET),
+                self::SECRET,
+            );
+            self::assertSame([$values['id'], $values['type']], [$event->id, $event->type]);
+            self::assertSame(Invoice::class, $event->data->object::class);
+        }
+
+        // Con $client->constructEvent(), ligado al cliente: la factura queda con su clave.
+        $body = json_encode(Fixtures::EVENT_INVOICE_ISSUED, JSON_THROW_ON_ERROR);
+        $event = $this->api->client(Fixtures::OTHER_KEY)->constructEvent(
+            $body,
+            WebhookSignature::generateHeader($body, self::SECRET),
+            self::SECRET,
+        );
+        $invoice = $event->data->object;
+        self::assertInstanceOf(Invoice::class, $invoice);
+        self::assertSame(
+            [Invoice::STATUS_ISSUED, Fixtures::INVOICE_CAE],
+            [$invoice->status, $invoice->cae],
+        );
+        self::assertSame([], $this->api->requests);
+
+        self::assertSame(
+            ['invoice.issued', 'invoice.rejected', 'invoice.failed'],
+            [Event::TYPE_INVOICE_ISSUED, Event::TYPE_INVOICE_REJECTED, Event::TYPE_INVOICE_FAILED],
+        );
+        $types = array_keys((new \ReflectionClass(Event::class))->getConstants());
+        $position = array_flip($types);
+        self::assertSame(
+            ['TYPE_INVOICE_ISSUED', 'TYPE_INVOICE_REJECTED', 'TYPE_INVOICE_FAILED'],
+            array_slice($types, $position['TYPE_IDENTITY_VERIFICATION_CANCELED'] + 1, 3),
+        );
+        self::assertSame(
+            'TYPE_PSP_CUSTOMER_ACTIVATED',
+            $types[$position['TYPE_INVOICE_FAILED'] + 1] ?? null,
         );
     }
 

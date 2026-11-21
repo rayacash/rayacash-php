@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RayaCash\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\PspCustomer;
 use RayaCash\PspTransfer;
@@ -256,6 +257,59 @@ final class PaginationTest extends TestCase
                 ['customer' => Fixtures::PSP_CUSTOMER_ID, 'limit' => '2'],
                 ['customer' => Fixtures::PSP_CUSTOMER_ID, 'limit' => '2', 'cursor' => 'c1'],
             ],
+            $this->queries(),
+        );
+        self::assertSame(['Bearer ' . Fixtures::TEST_KEY], $this->authorizations());
+    }
+
+    /**
+     * El Facturador: las facturas se recorren por su propia ruta, con los mismos filtros y las
+     * mismas opciones (con autoPagingIter() y con el estilo global), y cada elemento es una
+     * Invoice.
+     */
+    public function testInvoicesWalkEveryPage(): void
+    {
+        $this->api->add(200, Fixtures::invoicePage(['inv_1', 'inv_2'], 'c1'));
+        $this->api->add(200, Fixtures::invoicePage(['inv_3', 'inv_4'], 'c2'));
+        $this->api->add(200, Fixtures::invoicePage(['inv_5'], null));
+        $page = $this->api->client()->invoices->list(
+            ['status' => 'issued', 'created_gte' => '2026-11-01T00:00:00-03:00', 'limit' => 2],
+            ['api_key' => Fixtures::OTHER_KEY],
+        );
+        $ids = [];
+        $classes = [];
+        foreach ($page->autoPagingIter() as $index => $invoice) {
+            $ids[$index] = $invoice->id;
+            $classes[] = $invoice::class;
+        }
+        self::assertSame(['inv_1', 'inv_2', 'inv_3', 'inv_4', 'inv_5'], $ids);
+        self::assertSame(array_fill(0, 5, Invoice::class), $classes);
+        foreach ($this->api->requests as $request) {
+            self::assertSame('/v1/invoices', $request->path);
+        }
+        $filters = ['status' => 'issued', 'created_gte' => '2026-11-01T00:00:00-03:00'];
+        self::assertSame(
+            [
+                [...$filters, 'limit' => '2'],
+                [...$filters, 'limit' => '2', 'cursor' => 'c1'],
+                [...$filters, 'limit' => '2', 'cursor' => 'c2'],
+            ],
+            $this->queries(),
+        );
+        self::assertSame(['Bearer ' . Fixtures::OTHER_KEY], $this->authorizations());
+
+        // Con el estilo global, página por página con nextPage().
+        RayaCash::setApiKey(Fixtures::TEST_KEY);
+        RayaCash::setHttpClient($this->api);
+        $this->api->requests = [];
+        $this->api->add(200, Fixtures::invoicePage(['inv_6'], 'c3'));
+        $this->api->add(200, Fixtures::invoicePage(['inv_7'], null));
+        $first = Invoice::list(['status' => 'rejected']);
+        $next = $first->nextPage();
+        self::assertSame(['inv_6', 'inv_7'], [$first->data[0]->id, $next->data[0]->id]);
+        self::assertFalse($next->has_more);
+        self::assertSame(
+            [['status' => 'rejected'], ['status' => 'rejected', 'cursor' => 'c3']],
             $this->queries(),
         );
         self::assertSame(['Bearer ' . Fixtures::TEST_KEY], $this->authorizations());

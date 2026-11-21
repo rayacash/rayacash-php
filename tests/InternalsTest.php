@@ -31,6 +31,7 @@ final class InternalsTest extends TestCase
      * siguiente). Al publicar una, sumala acá.
      */
     private const PUBLISHED = [
+        '1.3.0' => '1f01ae3af12b7ba1f6b338d44e6be646d48473a3823a2a9adc1b00c3f7ae3430',
         '1.2.0' => 'c8543395509f633c2e122c98fdbfeaa23f7101737cb8d084d7e045a3f39e220a',
         '1.1.0' => '60e0dc816b3dcd37ef3f447437590a31d9d19d288a5aa2c45d2559564bd1e97d',
         '1.0.0' => 'a918899e3f0f7e4041aae960f7474796fdeb8f985f7cc0d12b096e98ad68f2e8',

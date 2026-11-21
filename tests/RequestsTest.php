@@ -620,6 +620,26 @@ final class RequestsTest extends TestCase
             Fixtures::BALANCE,
             'el saldo de Raya PSP',
         ];
+        yield 'invoices->create' => [
+            static fn(RayaClient $client): mixed => $client->invoices->create(
+                ['dni' => Fixtures::INVOICE_DNI, 'amount' => 15000],
+                ['idempotency_key' => 'k'],
+            ),
+            Fixtures::PAYMENT_PENDING,
+            'una factura',
+        ];
+        yield 'invoices->retrieve' => [
+            static fn(RayaClient $client): mixed => $client->invoices->retrieve(
+                Fixtures::INVOICE_ID,
+            ),
+            Fixtures::EVENT_INVOICE_ISSUED,
+            'una factura',
+        ];
+        yield 'invoices->list' => [
+            static fn(RayaClient $client): mixed => $client->invoices->list(),
+            Fixtures::INVOICE_ISSUED,
+            'una lista',
+        ];
     }
 
     /**
