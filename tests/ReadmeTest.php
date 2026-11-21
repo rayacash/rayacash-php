@@ -16,6 +16,7 @@ use RayaCash\Exception\RayaException;
 use RayaCash\Exception\SignatureVerificationException;
 use RayaCash\IdentityVerification;
 use RayaCash\IdentityVerificationFiles;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -66,6 +67,8 @@ final class ReadmeTest extends TestCase
         'customerBalance' => [PspCustomerBalance::class],
         'pspTransfer' => [PspTransfer::class],
         'pspBalance' => [PspBalance::class],
+        'invoice' => [Invoice::class],
+        'message' => [Invoice\ArcaMessage::class],
         'object' => [
             Payment::class,
             Transfer::class,
@@ -73,6 +76,7 @@ final class ReadmeTest extends TestCase
             PspCustomer::class,
             PspTransfer::class,
             PspDocumentRequest::class,
+            Invoice::class,
         ],
         'page' => [ListObject::class],
         'event' => [Event::class],
@@ -128,6 +132,21 @@ final class ReadmeTest extends TestCase
         'psp.transfer.failed',
         'psp.document_request.created',
         'psp.document_request.closed',
+    ];
+
+    /** Los 2 códigos de error del Facturador: van en la tabla de «Errores». */
+    private const FACTURADOR_CODES = ['FACTURADOR_NOT_READY', 'INVOICE_NOT_FOUND'];
+
+    /** Los 3 eventos del Facturador: van en «Webhooks». */
+    private const INVOICE_EVENTS = ['invoice.issued', 'invoice.rejected', 'invoice.failed'];
+
+    /** Los motivos de FACTURADOR_NOT_READY (data.reason). */
+    private const NOT_READY_REASONS = [
+        'not_configured',
+        'checking',
+        'action_required',
+        'certificate_expired',
+        'disabled',
     ];
 
     public function testTheReadmeHasPhpExamples(): void
@@ -275,14 +294,14 @@ final class ReadmeTest extends TestCase
     }
 
     /**
-     * «Raya PSP», entre Identidad y Sandbox: el índice, el link a la referencia, el flujo en orden
-     * y ningún precio; los 7 códigos en «Errores» y los 12 eventos en «Webhooks».
+     * «Raya PSP», entre Identidad y Facturador: el índice, el link a la referencia, el flujo en
+     * orden y ningún precio; los 7 códigos en «Errores» y los 12 eventos en «Webhooks».
      */
     public function testThePspSectionTellsTheFlowTheErrorsAndTheEvents(): void
     {
         $readme = self::readme();
         self::assertStringContainsString(
-            "- [Identidad](#identidad)\n- [Raya PSP](#raya-psp)\n- [Sandbox](#sandbox)\n",
+            "- [Identidad](#identidad)\n- [Raya PSP](#raya-psp)\n- [Facturador](#facturador)\n",
             $readme,
         );
         $psp = self::section($readme, 'Raya PSP');
@@ -321,9 +340,121 @@ final class ReadmeTest extends TestCase
         }
         // En el sandbox todavía no está.
         self::assertStringContainsString(
-            'Identidad y Raya PSP (`psp`): con una clave de prueba responden 403',
+            'Identidad, Raya PSP (`psp`) y el Facturador (`invoices`',
             self::section($readme, 'Sandbox'),
         );
+    }
+
+    /**
+     * «Facturador», entre Raya PSP y Sandbox: el índice, el link a la referencia, desde qué
+     * versión existe, el flujo en orden (configurar en el dashboard, crear, el webhook, leer y
+     * listar), solo en la cuenta real y ningún precio; los 2 códigos en «Errores» (con los motivos
+     * de FACTURADOR_NOT_READY en la sección), los 3 eventos en «Webhooks» y la clave obligatoria
+     * en «Idempotencia».
+     */
+    public function testTheFacturadorSectionTellsTheFlowTheErrorsAndTheEvents(): void
+    {
+        $readme = self::readme();
+        self::assertStringContainsString(
+            "- [Raya PSP](#raya-psp)\n- [Facturador](#facturador)\n- [Sandbox](#sandbox)\n",
+            $readme,
+        );
+        $facturador = self::section($readme, 'Facturador');
+        self::assertLessThan(
+            strpos($readme, "\n## Sandbox\n"),
+            strpos($readme, "\n## Facturador\n"),
+        );
+        self::assertGreaterThan(
+            strpos($readme, "\n## Raya PSP\n"),
+            strpos($readme, "\n## Facturador\n"),
+        );
+        self::assertStringContainsString('https://raya.cash/api/invoices', $facturador);
+        self::assertStringContainsString(
+            '`$client->invoices` existe desde la 1.4.0.',
+            $facturador,
+        );
+        $position = 0;
+        foreach (
+            [
+                'Negocios › Facturador',
+                'invoices->create(',
+                'invoice.issued',
+                'invoices->retrieve(',
+                'invoices->list(',
+            ] as $step
+        ) {
+            $found = strpos($facturador, $step);
+            self::assertNotFalse($found, $step);
+            self::assertGreaterThan($position, $found, "{$step} va después del paso anterior");
+            $position = $found;
+        }
+        // Lo que se configura en el dashboard, y la clave obligatoria.
+        foreach (
+            [
+                'tu punto de venta de ARCA',
+                'tu certificado de ARCA y su clave privada',
+                'tu condición frente al IVA',
+                'el concepto',
+                'La `idempotency_key` es obligatoria',
+                'responde `202` con la factura `pending`',
+                "['dni' => '12345678', 'amount' => 15000",
+            ] as $text
+        ) {
+            self::assertStringContainsString($text, $facturador, $text);
+        }
+        // Solo en la cuenta real: con una clave de prueba, 403.
+        self::assertStringContainsString('`SANDBOX_NOT_SUPPORTED`', $facturador);
+        self::assertStringContainsString(
+            'el Facturador (`invoices`',
+            self::section($readme, 'Sandbox'),
+        );
+        // Sin precios: ningún monto lleva signo de pesos.
+        self::assertDoesNotMatchRegularExpression('/\$\s?\d/', $facturador);
+        $errors = self::section($readme, 'Errores');
+        foreach (self::FACTURADOR_CODES as $code) {
+            self::assertStringContainsString("`{$code}`", $errors, $code);
+            self::assertStringContainsString("`{$code}`", $facturador, $code);
+        }
+        foreach (self::NOT_READY_REASONS as $reason) {
+            self::assertStringContainsString("`{$reason}`", $facturador, $reason);
+        }
+        $webhooks = self::section($readme, 'Webhooks');
+        foreach (self::INVOICE_EVENTS as $type) {
+            self::assertStringContainsString("`{$type}`", $webhooks, $type);
+            self::assertStringContainsString("`{$type}`", $facturador, $type);
+        }
+        self::assertStringContainsString(
+            '`psp->transfers->create` e `invoices->create` exigen la `idempotency_key`',
+            self::section($readme, 'Idempotencia'),
+        );
+    }
+
+    /**
+     * Los `use` de cada ejemplo van juntos, sin líneas en blanco entre ellos, como en la doc web
+     * (/api) y en los README de Python y Node.
+     */
+    public function testTheImportsOfEachExampleGoTogether(): void
+    {
+        foreach (self::blocks() as $block) {
+            $header = [];
+            foreach (explode("\n", $block['code']) as $line) {
+                if (str_starts_with($line, 'use ')) {
+                    $header[] = $line;
+                } elseif ($header !== [] && trim($line) === '') {
+                    $header[] = '';
+                } elseif ($header !== []) {
+                    break;
+                }
+            }
+            while ($header !== [] && $header[array_key_last($header)] === '') {
+                array_pop($header);
+            }
+            self::assertNotContains(
+                '',
+                $header,
+                "README.md:{$block['line']} separa sus use:\n" . implode("\n", $header),
+            );
+        }
     }
 
     /**

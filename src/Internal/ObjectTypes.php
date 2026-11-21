@@ -10,6 +10,7 @@ use RayaCash\ConnectPayout;
 use RayaCash\Event;
 use RayaCash\IdentityVerification;
 use RayaCash\IdentityVerificationFiles;
+use RayaCash\Invoice;
 use RayaCash\ListObject;
 use RayaCash\OAuthToken;
 use RayaCash\Payment;
@@ -39,6 +40,7 @@ final class ObjectTypes
         'event' => Event::class,
         'identity.verification' => IdentityVerification::class,
         'identity.verification_files' => IdentityVerificationFiles::class,
+        'invoice' => Invoice::class,
         'list' => ListObject::class,
         'oauth_token' => OAuthToken::class,
         'payment' => Payment::class,
@@ -58,6 +60,7 @@ final class ObjectTypes
         ConnectPayout::class => 'un payout',
         IdentityVerification::class => 'una verificación',
         IdentityVerificationFiles::class => 'el objeto de las imágenes de una verificación',
+        Invoice::class => 'una factura',
         ListObject::class => 'una lista',
         OAuthToken::class => 'un access_token',
         Payment::class => 'un pago',

@@ -6,6 +6,7 @@ namespace RayaCash\Event;
 
 use RayaCash\ConnectOrder;
 use RayaCash\IdentityVerification;
+use RayaCash\Invoice;
 use RayaCash\Payment;
 use RayaCash\PspCustomer;
 use RayaCash\PspDocumentRequest;
@@ -15,11 +16,11 @@ use RayaCash\Transfer;
 
 /**
  * Lo que trae un evento: el Transfer, el Payment, el ConnectOrder, la IdentityVerification
- * (siempre con person en null), el PspCustomer, la PspTransfer o el PspDocumentRequest tal como
- * estaba cuando ocurrió.
+ * (siempre con person en null), la Invoice, el PspCustomer, la PspTransfer o el
+ * PspDocumentRequest tal como estaba cuando ocurrió.
  *
  * @property-read (
- *     Transfer|Payment|ConnectOrder|IdentityVerification|PspCustomer|PspTransfer
+ *     Transfer|Payment|ConnectOrder|IdentityVerification|Invoice|PspCustomer|PspTransfer
  *     |PspDocumentRequest|RayaObject
  * ) $object
  */

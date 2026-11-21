@@ -25,6 +25,7 @@ namespace RayaCash\Tests\Types\Data;
 use RayaCash\Checkout;
 use RayaCash\ConnectOrder;
 use RayaCash\IdentityVerification;
+use RayaCash\Invoice;
 use RayaCash\Payment;
 use RayaCash\PspCustomer;
 use RayaCash\RayaClient;
@@ -218,6 +219,35 @@ function expectErrors(RayaClient $client, Payment $payment, ?string $header, str
     // error: method.staticCall: RayaCash\PspCustomer::block()
     // error: argument.type: Parameter #1 $options
     PspCustomer::block('pspc_x');
+
+    // El Facturador: la idempotency_key es obligatoria en invoices->create, como en las
+    // transferencias (una venta, una factura): sin las opciones…
+    // error: arguments.count: InvoiceService::create() invoked with 1 parameter
+    $client->invoices->create(['dni' => '12345678', 'amount' => 15000]);
+
+    // …o con las opciones, pero sin la clave.
+    // error: argument.type: Parameter #2 $options
+    $client->invoices->create(['dni' => '12345678', 'amount' => 15000], []);
+
+    // El dni va como string: '12345678'.
+    // error: argument.type: Parameter #1 $params
+    $client->invoices->create(['dni' => 12345678, 'amount' => 15000], $key);
+
+    // El total es obligatorio…
+    // error: argument.type: Parameter #1 $params
+    $client->invoices->create(['dni' => '12345678'], $key);
+
+    // …y metadata es de string a string.
+    // error: argument.type: Parameter #1 $params
+    $client->invoices->create(['dni' => '1', 'amount' => 1, 'metadata' => ['n' => 1042]], $key);
+
+    // Los filtros de la lista son los de la API: voided no es un estado de una factura.
+    // error: argument.type: Parameter #1 $params
+    $client->invoices->list(['status' => 'voided']);
+
+    // Invoice::create() (estilo global) también exige la clave.
+    // error: argument.type: Parameter #2 $options
+    Invoice::create(['dni' => '12345678', 'amount' => 15000], []);
 
     // Los nombres de la 1.1.0 (alias deprecados) piden lo mismo que los nuevos: fee es un monto…
     // error: argument.type: Parameter #1 $params

@@ -20,6 +20,7 @@ use RayaCash\Internal\Validation;
 use RayaCash\Service\BalanceService;
 use RayaCash\Service\ConnectService;
 use RayaCash\Service\IdentityService;
+use RayaCash\Service\InvoiceService;
 use RayaCash\Service\OAuthService;
 use RayaCash\Service\PaymentService;
 use RayaCash\Service\PspService;
@@ -47,6 +48,9 @@ use RayaCash\Service\UserService;
  *
  * Si tu cuenta de empresa tiene Raya PSP activado, `$client->psp` les da a tus clientes una
  * cuenta con un CVU a su nombre y transfiere en su nombre, con tu clave secreta.
+ *
+ * Con el Facturador configurado (Negocios › Facturador, en el dashboard), `$client->invoices`
+ * emite facturas electrónicas de ARCA a tus clientes, con tu clave secreta.
  *
  * En un sandbox, el cliente va con su clave secreta de prueba (raya_sk_test_…) y la misma
  * api_base: la clave decide el entorno. `$client->testHelpers` solo funciona ahí.
@@ -98,6 +102,12 @@ class RayaClient
      * clave secreta.
      */
     public readonly PspService $psp;
+
+    /**
+     * Facturador: emitir facturas electrónicas de ARCA (Factura B o C) con el certificado y el
+     * punto de venta de tu Facturador, y consultarlas, con tu clave secreta.
+     */
+    public readonly InvoiceService $invoices;
 
     /**
      * Lo que solo existe en un sandbox, con su clave secreta de prueba (raya_sk_test_…):
@@ -245,6 +255,7 @@ class RayaClient
         $this->checkout = $this->connect;
         $this->identity = new IdentityService($this->requestor);
         $this->psp = new PspService($this->requestor);
+        $this->invoices = new InvoiceService($this->requestor);
         $this->testHelpers = new SandboxHelpersService($this->requestor);
     }
 
